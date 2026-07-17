@@ -15,7 +15,6 @@ class DutyScheduler:
     def _process_teachers(self, df):
         teachers_dict = {}
         for _, row in df.iterrows():
-            # 這裡對應了新的中文欄位名稱
             teachers_dict[row['姓名']] = {
                 'role': row['職級'],
                 'is_pe': str(row.get('是否體育老師', '否')).strip() == '是',
@@ -30,14 +29,12 @@ class DutyScheduler:
             tt[name] = {}
             for day in ['星期一', '星期二', '星期三', '星期四', '星期五']:
                 if name in df['老師姓名'].values:
-                    # 根據「老師姓名」、「星期」、「節數」抓取資料
                     tt[name][day] = list(df[(df['老師姓名'] == name) & (df['星期'] == day)]['節數'].values)
                 else:
                     tt[name][day] = []
         return tt
         
     def _process_locations(self, df):
-        # 根據中文欄位設定索引
         return df.set_index(['老師姓名', '星期', '節數'])['樓層'].to_dict() if not df.empty else {}
 
     def _define_duties(self):
@@ -95,9 +92,25 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
     if file_teachers and file_timetable and file_locations:
         with st.spinner('系統正在根據您的條件進行運算，請稍候...'):
             try:
-                df_teachers = pd.read_csv(file_teachers)
-                df_timetable = pd.read_csv(file_timetable)
-                df_locations = pd.read_csv(file_locations)
+                # 建立一個自動辨識編碼的讀取小幫手
+                def read_csv_auto(file):
+                    try:
+                        # 先嘗試最標準的 UTF-8
+                        return pd.read_csv(file, encoding='utf-8')
+                    except UnicodeDecodeError:
+                        # 如果失敗，將檔案指針移回開頭，再嘗試 Big5
+                        file.seek(0)
+                        try:
+                            return pd.read_csv(file, encoding='big5')
+                        except UnicodeDecodeError:
+                             # 如果再失敗，嘗試 cp950
+                            file.seek(0)
+                            return pd.read_csv(file, encoding='cp950')
+
+                # 使用小幫手來讀取檔案
+                df_teachers = read_csv_auto(file_teachers)
+                df_timetable = read_csv_auto(file_timetable)
+                df_locations = read_csv_auto(file_locations)
                 
                 scheduler = DutyScheduler(df_teachers, df_timetable, df_locations)
                 schedule_result, scores_result = scheduler.run_scheduler()
@@ -121,3 +134,4 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 st.info("請確認您的 CSV 檔案是否使用了正確的「中文欄位名稱」。")
     else:
         st.warning("⚠️ 請先在上方上傳所有 3 個必要的 CSV 檔案！")
+
