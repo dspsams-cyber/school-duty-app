@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 
+# 核心排表邏輯 (支援全中文欄位)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df):
@@ -15,10 +15,11 @@ class DutyScheduler:
     def _process_teachers(self, df):
         teachers_dict = {}
         for _, row in df.iterrows():
-            teachers_dict[row['name']] = {
-                'role': row['role'],
-                'is_pe': str(row.get('is_pe_teacher', '否')).strip() == '是',
-                'special_role': row.get('special_role', '無'),
+            # 這裡對應了新的中文欄位名稱
+            teachers_dict[row['姓名']] = {
+                'role': row['職級'],
+                'is_pe': str(row.get('是否體育老師', '否')).strip() == '是',
+                'special_role': row.get('特殊身份', '無'),
                 'score': 0
             }
         return teachers_dict
@@ -28,14 +29,16 @@ class DutyScheduler:
         for name in self.teachers:
             tt[name] = {}
             for day in ['星期一', '星期二', '星期三', '星期四', '星期五']:
-                if name in df['teacher_name'].values:
-                    tt[name][day] = list(df[(df['teacher_name'] == name) & (df['day'] == day)]['period'].values)
+                if name in df['老師姓名'].values:
+                    # 根據「老師姓名」、「星期」、「節數」抓取資料
+                    tt[name][day] = list(df[(df['老師姓名'] == name) & (df['星期'] == day)]['節數'].values)
                 else:
                     tt[name][day] = []
         return tt
         
     def _process_locations(self, df):
-        return df.set_index(['teacher_name', 'day', 'period'])['floor'].to_dict() if not df.empty else {}
+        # 根據中文欄位設定索引
+        return df.set_index(['老師姓名', '星期', '節數'])['樓層'].to_dict() if not df.empty else {}
 
     def _define_duties(self):
         duties = {}
@@ -115,6 +118,6 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認上傳的 CSV 檔案格式與欄位名稱是否正確。")
+                st.info("請確認您的 CSV 檔案是否使用了正確的「中文欄位名稱」。")
     else:
         st.warning("⚠️ 請先在上方上傳所有 3 個必要的 CSV 檔案！")
