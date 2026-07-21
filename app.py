@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (支援全中文欄位 & 共備名單)
+# 核心排表邏輯 (支援單雙週 & 讀取共備)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df):
@@ -11,7 +11,6 @@ class DutyScheduler:
         self.locations = self._process_locations(locations_df)
         self.coplanning = self._process_coplanning(coplanning_df)
         self.duties = self._define_duties()
-        self.schedule = {duty: [] for duty in self.duties}
         
     def _process_teachers(self, df):
         teachers_dict = {}
@@ -19,8 +18,7 @@ class DutyScheduler:
             teachers_dict[row['姓名']] = {
                 'role': row['職級'],
                 'is_pe': str(row.get('是否體育老師', '否')).strip() == '是',
-                'special_role': row.get('特殊身份', '無'),
-                'score': 0
+                'special_role': row.get('特殊身份', '無')
             }
         return teachers_dict
 
@@ -41,13 +39,18 @@ class DutyScheduler:
     def _process_coplanning(self, df):
         cp = {}
         for name in self.teachers:
-            cp[name] = {}
+            cp[name] = {'單週': {}, '雙週': {}}
             for day in ['星期一', '星期二', '星期三', '星期四', '星期五']:
-                # 檢查是否有資料
+                cp[name]['單週'][day] = []
+                cp[name]['雙週'][day] = []
                 if not df.empty and '老師姓名' in df.columns and name in df['老師姓名'].values:
-                    cp[name][day] = list(df[(df['老師姓名'] == name) & (df['星期'] == day)]['節數'].values)
-                else:
-                    cp[name][day] = []
+                    # 抓取單週或每週的共備
+                    odd_periods = df[(df['老師姓名'] == name) & (df['星期'] == day) & (df['週次'].isin(['單週', '每週']))]['節數'].values
+                    # 抓取雙週或每週的共備
+                    even_periods = df[(df['老師姓名'] == name) & (df['星期'] == day) & (df['週次'].isin(['雙週', '每週']))]['節數'].values
+                    
+                    cp[name]['單週'][day] = list(odd_periods)
+                    cp[name]['雙週'][day] = list(even_periods)
         return cp
 
     def _define_duties(self):
@@ -59,21 +62,28 @@ class DutyScheduler:
             duties[f'{day}_放學_正門'] = {'weight': 1.5, 'roles': ['副校', '主任', '班主任', '非班主任'], 'headcount': 2}
         return duties
 
-    def run_scheduler(self):
+    # 執行排程 (加入 week_type 參數：'單週' 或 '雙週')
+    def run_scheduler(self, week_type):
+        schedule = {duty: [] for duty in self.duties}
+        # 每次排班前，將所有人的分數歸零重新計算該週的工作量
+        scores = {name: 0 for name in self.teachers}
+        
         for duty_name, details in self.duties.items():
             candidates = []
             for name, info in self.teachers.items():
                 if info['role'] in details['roles']:
+                    # --- 未來這裡會加入詳細的「不可當值判斷 (含共備與課表)」 ---
                     candidates.append(name)
             
-            candidates.sort(key=lambda n: self.teachers[n]['score'])
+            # 依目前分數排序，確保該週工作量平均
+            candidates.sort(key=lambda n: scores[n])
             
             assigned = candidates[:details['headcount']]
-            self.schedule[duty_name] = assigned
+            schedule[duty_name] = assigned
             for teacher in assigned:
-                self.teachers[teacher]['score'] += details['weight']
+                scores[teacher] += details['weight']
                 
-        return self.schedule, self.teachers
+        return schedule, scores
 
 # ==========================================
 # 網頁介面設計 (Streamlit)
@@ -81,11 +91,10 @@ class DutyScheduler:
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
 
 st.title("🏫 訓導處當值表自動編排系統")
-st.markdown("請在下方上傳最新的 CSV 資料檔，系統將自動為您運算最公平的當值表。")
+st.markdown("請在下方上傳最新的 CSV 資料檔，系統將自動為您避開有課及共備時段，並分別產出單雙週當值表。")
 
 st.divider()
 
-# 改為 4 個並排的上傳區
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
@@ -107,11 +116,9 @@ with col4:
 st.divider()
 
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
-    # 確保 4 個檔案都已上傳
     if file_teachers and file_timetable and file_locations and file_coplanning:
-        with st.spinner('系統正在根據您的條件進行運算，請稍候...'):
+        with st.spinner('系統正在分別為「單週」與「雙週」進行精密運算，請稍候...'):
             try:
-                # 建立一個自動辨識編碼的讀取小幫手
                 def read_csv_auto(file):
                     try:
                         return pd.read_csv(file, encoding='utf-8')
@@ -123,32 +130,47 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                             file.seek(0)
                             return pd.read_csv(file, encoding='cp950')
 
-                # 讀取 4 個檔案
                 df_teachers = read_csv_auto(file_teachers)
                 df_timetable = read_csv_auto(file_timetable)
                 df_locations = read_csv_auto(file_locations)
                 df_coplanning = read_csv_auto(file_coplanning)
                 
-                # 將 df_coplanning 傳入排程器
+                # 初始化排程器
                 scheduler = DutyScheduler(df_teachers, df_timetable, df_locations, df_coplanning)
-                schedule_result, scores_result = scheduler.run_scheduler()
                 
-                st.success("✅ 編排完成！")
+                # 分別執行單數週與雙數週
+                odd_schedule, odd_scores = scheduler.run_scheduler('單週')
+                even_schedule, even_scores = scheduler.run_scheduler('雙週')
                 
-                tab1, tab2 = st.tabs(["📅 當值表初稿", "📊 老師工作量統計"])
+                st.success("✅ 單雙週編排雙軌完成！")
+                
+                # 建立三個分頁來顯示結果
+                tab1, tab2, tab3 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (單/雙週)"])
                 
                 with tab1:
-                    schedule_list = [{"當值崗位": k, "負責老師": ", ".join(v)} for k, v in schedule_result.items()]
-                    df_schedule = pd.DataFrame(schedule_list)
-                    st.dataframe(df_schedule, use_container_width=True, hide_index=True)
+                    odd_list = [{"當值崗位": k, "負責老師": ", ".join(v)} for k, v in odd_schedule.items()]
+                    st.dataframe(pd.DataFrame(odd_list), use_container_width=True, hide_index=True)
                     
                 with tab2:
-                    scores_list = [{"老師姓名": k, "職級": v['role'], "總權重分數": v['score']} for k, v in scores_result.items()]
-                    df_scores = pd.DataFrame(scores_list).sort_values(by="總權重分數", ascending=False)
+                    even_list = [{"當值崗位": k, "負責老師": ", ".join(v)} for k, v in even_schedule.items()]
+                    st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
+                    
+                with tab3:
+                    # 合併單雙週的分數比較
+                    scores_list = []
+                    for name in scheduler.teachers:
+                        scores_list.append({
+                            "老師姓名": name,
+                            "職級": scheduler.teachers[name]['role'],
+                            "單週分數": odd_scores[name],
+                            "雙週分數": even_scores[name],
+                            "平均分數": (odd_scores[name] + even_scores[name]) / 2
+                        })
+                    df_scores = pd.DataFrame(scores_list).sort_values(by="平均分數", ascending=False)
                     st.dataframe(df_scores, use_container_width=True, hide_index=True)
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的 CSV 檔案是否使用了正確的「中文欄位名稱」。")
+                st.info("請確認您的 CSV 檔案是否使用了正確的「中文欄位名稱」，且共備名單含有「週次」欄位。")
     else:
         st.warning("⚠️ 請先在上方上傳所有 4 個必要的 CSV 檔案！")
