@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (內置完整崗位定義 & 早會指定專責老師)
+# 核心排表邏輯 (支援所屬班別 & 一年級班主任豁免放學隊)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df):
@@ -17,9 +17,10 @@ class DutyScheduler:
         if not df.empty:
             for _, row in df.iterrows():
                 teachers_dict[row['姓名']] = {
-                    'role': row['職級'],
+                    'role': str(row.get('職級', '')).strip(),
                     'is_pe': str(row.get('是否體育老師', '否')).strip() == '是',
-                    'special_role': row.get('特殊身份', '無')
+                    'special_role': str(row.get('特殊身份', '無')).strip(),
+                    'class_name': str(row.get('所屬班別', '無')).strip() # 新增：讀取所屬班別
                 }
         return teachers_dict
 
@@ -62,7 +63,7 @@ class DutyScheduler:
         duties = {}
         days = ['星期一', '星期二', '星期三', '星期四', '星期五']
         
-        # 1. 早會前當值
+        # 1. 早會前當值 (特定崗位單雙週固定陳淑怡、謝翠琳)
         morning_slots = {
             "早會_雨天操場_7:30-7:45": 1, "早會_雨天操場_7:45-8:00": 1,
             "早會_詢問處_7:30-7:45": 1, "早會_詢問處_7:45-8:00": 1, "早會_詢問處_8:00-8:15": 1,
@@ -72,11 +73,9 @@ class DutyScheduler:
         }
         for day in days:
             for duty_name, headcount in morning_slots.items():
-                 # 早會崗位區分單雙週
                 duties[f'{day}_{duty_name}_單週'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': headcount}
                 duties[f'{day}_{duty_name}_雙週'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': headcount}
                 
-                # 指定專責老師 (僅限早會)
                 if '雨天操場持咪' in duty_name:
                     duties[f'{day}_{duty_name}_單週']['fixed_teacher'] = ['陳淑怡']
                     duties[f'{day}_{duty_name}_雙週']['fixed_teacher'] = ['陳淑怡']
@@ -98,7 +97,7 @@ class DutyScheduler:
                 roles = ['班主任', '非班主任'] if '小息' in duty_name else ['副校', '主任', '非班主任']
                 duties[f'{day}_{duty_name}'] = {'weight': 1 if '小息' in duty_name else 2, 'roles': roles, 'headcount': headcount}
 
-        # 3. 放學當值
+        # 3. 放學當值 (嚴格限定副校/主任)
         after_school_slots = {
             "放學_雨天操場持咪": 1, "放學_家長隊(雨天操場)1": 1, "放學_家長隊(雨天操場)2": 1,
             "放學_大閘(外)": 1, "放學_新翼持咪": 1, "放學_正門大閘": 1
@@ -116,14 +115,29 @@ class DutyScheduler:
         return duties
 
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
-        # 早上共備豁免
+        teacher_info = self.teachers[teacher_name]
+        
+        # 1. 早上共備豁免
         if "早上" in duty_name and ("07:45" in duty_name or "08:00" in duty_name or "07:55" in duty_name):
             if day in self.coplanning[week_type] and teacher_name in self.coplanning[week_type][day]:
                 return True
+                
+        # 2. 一年級班主任豁免「放學隊」
+        if "放學隊" in duty_name:
+            if teacher_info.get('class_name', '').startswith('1'):
+                return True
+                
+        # 3. 特殊身份豁免：輔導主任不排小息及午膳
+        if teacher_info.get('special_role') == '輔導主任' and ('小息' in duty_name or '午膳' in duty_name):
+            return True
+            
+        # 4. 特殊身份豁免：圖書館老師只排放學隊，不排早會、小息、午膳
+        if teacher_info.get('special_role') == '圖書館老師' and '放學隊' not in duty_name:
+            return True
+
         return False
 
     def run_scheduler(self, week_type):
-        # 篩選出符合當前週次的崗位
         week_specific_duties = {
             name: details for name, details in self.duties.items() 
             if ('單週' in name and week_type == '單週') or \
@@ -137,7 +151,6 @@ class DutyScheduler:
         for duty_name, details in week_specific_duties.items():
             day = duty_name.split('_')[0]
             
-            # 如果這個崗位有「固定指派」的老師，直接派給他
             if 'fixed_teacher' in details:
                 assigned = details['fixed_teacher']
             else:
@@ -155,7 +168,6 @@ class DutyScheduler:
                 
             schedule[duty_name] = assigned
             for teacher in assigned:
-                # 只有當老師在名單內才加分 (防止固定指派的老師名字有誤導致程式報錯)
                 if teacher in scores:
                     scores[teacher] += details['weight']
                 
@@ -167,7 +179,7 @@ class DutyScheduler:
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
 
 st.title("🏫 訓導處當值表自動編排系統")
-st.markdown("系統已內置**完整崗位定義**、**單雙週共備豁免**及**早會專責老師**規則。")
+st.markdown("系統已內置**完整崗位定義**、**一年級班主任豁免**、**單雙週共備豁免**及**早會專責老師**規則。")
 
 st.divider()
 
@@ -193,7 +205,7 @@ st.divider()
 
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
     if file_teachers and file_timetable and file_locations and file_coplanning:
-        with st.spinner('系統正在為「單週」與「雙週」進行雙軌運算，並鎖定早會專責老師...'):
+        with st.spinner('系統正在為「單週」與「雙週」進行雙軌運算，並執行所有豁免規則...'):
             try:
                 def read_csv_auto(file):
                     try: return pd.read_csv(file, encoding='utf-8')
@@ -239,6 +251,4 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的4份 CSV 檔案是否使用了正確的「中文欄位名稱」。")
-    else:
-        st.warning("⚠️ 請先在上方上傳所有 4 個必要的 CSV 檔案！")
+                st.info("請確認您的4份 CSV 檔案是否使
