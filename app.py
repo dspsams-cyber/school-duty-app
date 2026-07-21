@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (支援單雙週 & 讀取共備名單檔案)
+# 核心排表邏輯 (內置完整崗位定義)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df):
@@ -40,7 +40,6 @@ class DutyScheduler:
         return {}
 
     def _process_coplanning(self, df):
-        # 初始化共備字典
         cp = {'單週': {}, '雙週': {}}
         for day in ['星期一', '星期二', '星期三', '星期四', '星期五']:
             cp['單週'][day] = []
@@ -62,35 +61,77 @@ class DutyScheduler:
     def _define_duties(self):
         duties = {}
         days = ['星期一', '星期二', '星期三', '星期四', '星期五']
+        
+        # 1. 早會前當值
+        morning_slots = {
+            "早會_雨天操場_7:30-7:45": 1, "早會_雨天操場_7:45-8:00": 1,
+            "早會_詢問處_7:30-7:45": 1, "早會_詢問處_7:45-8:00": 1, "早會_詢問處_8:00-8:15": 1,
+            "早會_正門大閘_7:30-7:45": 1, "早會_正門大閘_7:45-8:00": 1, "早會_正門大閘_8:00-8:15": 1,
+            "早會_雨天操場(二)_7:40-7:55": 1, "早會_雨天操場_7:55-8:10": 1,
+            "早會_雨天操場持咪_7:55-8:15": 1, "早會_宣佈_8:20-8:35": 1
+        }
         for day in days:
-            # 早上當值時間已拆分，以匹配共備時段
-            duties[f'{day}_早上_0730-0745'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': 2}
-            duties[f'{day}_早上_0745-0800'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': 2}
-            duties[f'{day}_早上_0800-0820'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': 2}
-            
-            duties[f'{day}_小息_地下'] = {'weight': 1, 'roles': ['班主任', '非班主任'], 'headcount': 3}
-            duties[f'{day}_放學_正門'] = {'weight': 1.5, 'roles': ['副校', '主任', '班主任', '非班主任'], 'headcount': 2}
+            for duty_name, headcount in morning_slots.items():
+                 # 早會崗位區分單雙週
+                duties[f'{day}_{duty_name}_單週'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': headcount}
+                duties[f'{day}_{duty_name}_雙週'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': headcount}
+
+        # 2. 小息及午膳當值
+        recess_lunch_slots = {
+            "小息一_6樓": 2, "小息一_5樓": 2, "小息一_4樓": 2, "小息一_2樓": 2, "小息一_地下": 2,
+            "小息一_3樓": 1, "小息一_1樓前後梯": 1,
+            "小息二_6樓": 2, "小息二_5樓": 2, "小息二_4樓": 2, "小息二_2樓": 2, "小息二_地下": 2,
+            "小息二_3樓": 1, "小息二_1樓前後梯": 1,
+            "午膳二_6樓": 2, "午膳二_5樓": 2, "午膳二_4樓": 2, "午膳二_3樓": 2, "午膳二_2樓": 2,
+            "午膳二_地下": 3
+        }
+        for day in days:
+            for duty_name, headcount in recess_lunch_slots.items():
+                roles = ['班主任', '非班主任'] if '小息' in duty_name else ['副校', '主任', '非班主任']
+                duties[f'{day}_{duty_name}'] = {'weight': 1 if '小息' in duty_name else 2, 'roles': roles, 'headcount': headcount}
+
+        # 3. 放學當值
+        after_school_slots = {
+            "放學_雨天操場持咪": 1, "放學_家長隊(雨天操場)1": 1, "放學_家長隊(雨天操場)2": 1,
+            "放學_大閘(外)": 1, "放學_新翼持咪": 1, "放學_正門大閘": 1
+        }
+        for day in days:
+            for duty_name, headcount in after_school_slots.items():
+                duties[f'{day}_{duty_name}'] = {'weight': 1, 'roles': ['副校', '主任'], 'headcount': headcount}
+
+        # 4. 放學隊
+        team_lead_slots = ["A", "B", "C", "D", "E", "G", "H"]
+        for day in days:
+            for route in team_lead_slots:
+                duties[f'{day}_放學隊_{route}'] = {'weight': 1, 'roles': ['班主任', '非班主任'], 'headcount': 1}
+                
         return duties
 
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
-        # 檢查是否在 07:45-08:20 共備時間
-        if "早上_0745-0800" in duty_name or "早上_0800-0820" in duty_name:
-            if teacher_name in self.coplanning[week_type][day]:
-                return True # 老師正在共備，不可當值
+        # 早上共備豁免
+        if "早上" in duty_name and ("07:45" in duty_name or "08:00" in duty_name or "07:55" in duty_name):
+            if day in self.coplanning[week_type] and teacher_name in self.coplanning[week_type][day]:
+                return True
         return False
 
     def run_scheduler(self, week_type):
-        schedule = {duty: [] for duty in self.duties}
+        # 篩選出符合當前週次的早會崗位
+        week_specific_duties = {
+            name: details for name, details in self.duties.items() 
+            if ('單週' in name and week_type == '單週') or \
+               ('雙週' in name and week_type == '雙週') or \
+               ('單週' not in name and '雙週' not in name)
+        }
+
+        schedule = {duty: [] for duty in week_specific_duties}
         scores = {name: 0 for name in self.teachers}
         
-        for duty_name, details in self.duties.items():
+        for duty_name, details in week_specific_duties.items():
             day = duty_name.split('_')[0]
             candidates = []
             for name, info in self.teachers.items():
-                # 檢查角色是否符合
                 if info['role'] not in details['roles']:
                     continue
-                # 檢查是否因共備而不可用
                 if self.is_teacher_unavailable(name, day, duty_name, week_type):
                     continue
                 
@@ -111,7 +152,7 @@ class DutyScheduler:
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
 
 st.title("🏫 訓導處當值表自動編排系統")
-st.markdown("系統已內置「單雙週排表」引擎，請上傳 4 份核心資料來產出公平的當值表。")
+st.markdown("系統已內置**完整崗位定義**及**單雙週共備豁免**規則。請上傳 4 份核心資料。")
 
 st.divider()
 
@@ -137,15 +178,13 @@ st.divider()
 
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
     if file_teachers and file_timetable and file_locations and file_coplanning:
-        with st.spinner('系統正在分別為「單週」與「雙週」進行精密運算...'):
+        with st.spinner('系統正在根據完整崗位定義，為「單週」與「雙週」進行雙軌運算...'):
             try:
                 def read_csv_auto(file):
-                    try:
-                        return pd.read_csv(file, encoding='utf-8')
+                    try: return pd.read_csv(file, encoding='utf-8')
                     except UnicodeDecodeError:
                         file.seek(0)
-                        try:
-                            return pd.read_csv(file, encoding='big5')
+                        try: return pd.read_csv(file, encoding='big5')
                         except UnicodeDecodeError:
                             file.seek(0)
                             return pd.read_csv(file, encoding='cp950')
@@ -165,28 +204,26 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 tab1, tab2, tab3 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (單/雙週)"])
                 
                 with tab1:
-                    odd_list = [{"當值崗位": k, "負責老師": ", ".join(v)} for k, v in odd_schedule.items()]
+                    odd_list = [{"當值崗位": k.replace('_單週',''), "負責老師": ", ".join(v)} for k, v in odd_schedule.items()]
                     st.dataframe(pd.DataFrame(odd_list), use_container_width=True, hide_index=True)
                     
                 with tab2:
-                    even_list = [{"當值崗位": k, "負責老師": ", ".join(v)} for k, v in even_schedule.items()]
+                    even_list = [{"當值崗位": k.replace('_雙週',''), "負責老師": ", ".join(v)} for k, v in even_schedule.items()]
                     st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
                     
                 with tab3:
                     scores_list = []
                     for name in scheduler.teachers:
                         scores_list.append({
-                            "老師姓名": name,
-                            "職級": scheduler.teachers[name]['role'],
-                            "單週分數": odd_scores[name],
-                            "雙週分數": even_scores[name],
-                            "平均分數": (odd_scores[name] + even_scores[name]) / 2
+                            "老師姓名": name, "職級": scheduler.teachers[name]['role'],
+                            "單週分數": odd_scores[name], "雙週分數": even_scores[name],
+                            "平均分數": (odd_scores.get(name, 0) + even_scores.get(name, 0)) / 2
                         })
                     df_scores = pd.DataFrame(scores_list).sort_values(by="平均分數", ascending=False)
                     st.dataframe(df_scores, use_container_width=True, hide_index=True)
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的 CSV 檔案是否使用了正確的「中文欄位名稱」。")
+                st.info("請確認您的4份 CSV 檔案是否使用了正確的「中文欄位名稱」。")
     else:
         st.warning("⚠️ 請先在上方上傳所有 4 個必要的 CSV 檔案！")
