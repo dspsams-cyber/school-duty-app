@@ -251,4 +251,6 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的4份 CSV 檔案是否使
+                st.info("請確認您的4份 CSV 檔案是否使用了正確的「中文欄位名稱」。")
+    else:
+        st.warning("⚠️ 請先在上方上傳所有 4 個必要的 CSV 檔案！")
