@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體：6大檔案 + 專責老師全面豁免 + 簡稱顯示 + 午膳2分)
+# 核心排表邏輯 (完全體：雙階段排班 & 雙軌分數統計)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -108,16 +108,15 @@ class DutyScheduler:
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_單週'] = {'weight': 0.5, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_雙週'] = {'weight': 0.5, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
 
-        # 3. 小息(1.0分)、午膳(2.0分)、放學(1.0分)
+        # 3. 常規當值 - 小息與放學 (1.0分)
         other_slots = {
             "小息一_6樓": (2, 1.0), "小息一_5樓": (2, 1.0), "小息一_4樓": (2, 1.0), "小息一_2樓": (2, 1.0), "小息一_地下": (2, 1.0), "小息一_3樓": (1, 1.0), "小息一_1樓前後梯": (1, 1.0),
             "小息二_6樓": (2, 1.0), "小息二_5樓": (2, 1.0), "小息二_4樓": (2, 1.0), "小息二_2樓": (2, 1.0), "小息二_地下": (2, 1.0), "小息二_3樓": (1, 1.0), "小息二_1樓前後梯": (1, 1.0),
-            "午膳二_6樓": (2, 2.0), "午膳二_5樓": (2, 2.0), "午膳二_4樓": (2, 2.0), "午膳二_3樓": (2, 2.0), "午膳二_2樓": (2, 2.0), "午膳二_地下": (3, 2.0),
             "放學_雨天操場持咪": (1, 1.0), "放學_家長隊(雨天操場)1": (1, 1.0), "放學_家長隊(雨天操場)2": (1, 1.0), "放學_大閘(外)": (1, 1.0), "放學_新翼持咪": (1, 1.0), "放學_正門大閘": (1, 1.0)
         }
         for day in days:
             for duty, (count, weight) in other_slots.items():
-                roles = ['班主任', '非班主任'] if '小息' in duty else (['副校', '主任'] if '放學_' in duty else ['副校', '主任', '非班主任'])
+                roles = ['班主任', '非班主任'] if '小息' in duty else ['副校', '主任']
                 duties[f'{day}_{duty}'] = {'weight': weight, 'roles': roles, 'headcount': count}
 
         # 4. 放學隊 (每週專責，計1.0分)
@@ -125,6 +124,14 @@ class DutyScheduler:
         for route in team_lead_routes:
             duties[f'全週_放學隊_{route}'] = {'weight': 1.0, 'roles': ['班主任', '非班主任'], 'headcount': 1}
             
+        # 5. 午膳當值 (獨立分類：2.0分，專供第二階段副校/主任/非班主任公平分配)
+        lunch_slots = {
+            "午膳二_6樓": (2, 2.0), "午膳二_5樓": (2, 2.0), "午膳二_4樓": (2, 2.0), "午膳二_3樓": (2, 2.0), "午膳二_2樓": (2, 2.0), "午膳二_地下": (3, 2.0)
+        }
+        for day in days:
+            for duty, (count, weight) in lunch_slots.items():
+                duties[f'{day}_{duty}'] = {'weight': weight, 'roles': ['副校', '主任', '非班主任'], 'headcount': count, 'is_lunch': True}
+
         return duties
 
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
@@ -149,10 +156,22 @@ class DutyScheduler:
     def run_scheduler(self, week_type):
         week_specific_duties = {k: v for k, v in self.duties.items() if week_type in k or ('單週' not in k and '雙週' not in k)}
         schedule = {duty: [] for duty in week_specific_duties}
-        scores = {name: 0 for name in self.teachers}
+        
+        # 建立兩個計分板：常規計分板（報表顯示）與運算用總分計分板
+        regular_scores = {name: 0 for name in self.teachers}
+        reference_scores = {name: 0 for name in self.teachers}
+        
         weekly_afternoon_teachers = set()
 
-        sorted_duties = sorted(week_specific_duties.items(), key=lambda x: 0 if '全週' in x[0] else 1)
+        # 雙階段排班：先排非午膳的常規崗位，最後排午膳
+        # 排序：'全週'優先 (0)，其餘常規其次 (1)，'午膳'最後 (2)
+        def get_duty_priority(item):
+            name, details = item
+            if '全週' in name: return 0
+            if details.get('is_lunch'): return 2
+            return 1
+
+        sorted_duties = sorted(week_specific_duties.items(), key=get_duty_priority)
 
         for duty, details in sorted_duties:
             day = duty.split('_')[0]
@@ -165,35 +184,43 @@ class DutyScheduler:
                 class_teachers = [name for name, info in self.teachers.items() if info.get('class_name') == cls]
                 available_ct = [t for t in class_teachers if not self.is_teacher_unavailable(t, day, duty, week_type)]
                 if available_ct:
-                    available_ct.sort(key=lambda n: scores.get(n, 0))
+                    # 使用「運算總分」進行排序，確保最公平
+                    available_ct.sort(key=lambda n: reference_scores.get(n, 0))
                     assigned = [available_ct[0]]
                 else:
                     backup_teachers = [t for t in self.subjects.get(cls, []) if not self.is_teacher_unavailable(t, day, duty, week_type)]
-                    backup_teachers.sort(key=lambda n: scores.get(n, 0))
+                    backup_teachers.sort(key=lambda n: reference_scores.get(n, 0))
                     if backup_teachers: assigned = [backup_teachers[0]]
             else:
                 candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type)]
                 if '放學' in duty and '全週' not in duty:
                     candidates = [c for c in candidates if c not in weekly_afternoon_teachers]
                     
-                candidates.sort(key=lambda n: scores.get(n, 0))
+                # 使用「運算總分」進行排序，使午膳排位時能精準挑選最得閒的老師
+                candidates.sort(key=lambda n: reference_scores.get(n, 0))
                 assigned = candidates[:details['headcount']]
             
             schedule[duty] = assigned
             for teacher in assigned:
-                if teacher in scores: scores[teacher] += details['weight']
+                if teacher in reference_scores:
+                    # 無論如何，背後運算總分都會累加，以供下一個崗位進行公平排序
+                    reference_scores[teacher] += details['weight']
+                    
+                    # 報表專用常規分數：只有非午膳崗位才計入常規工作量
+                    if not details.get('is_lunch', False):
+                        regular_scores[teacher] += details['weight']
                     
             if '全週_放學隊' in duty:
                 weekly_afternoon_teachers.update(assigned)
                 
-        return schedule, scores
+        return schedule, regular_scores, reference_scores
 
 # ==========================================
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
 st.title("🏫 訓導處當值表自動編排系統 (完全資料驅動版)")
-st.markdown("系統已內置**所有崗位及豁免規則**，結果將會顯示「姓名(簡稱)」。請上傳 6 份核心資料：")
+st.markdown("系統已搭載最強引擎，專責老師獲得全面豁免。午膳當值已獨立拆分，不計日常工作量，但提供加權參考值。")
 st.divider()
 
 col1, col2, col3 = st.columns(3)
@@ -208,7 +235,6 @@ with col6: file_fixed = st.file_uploader("6️⃣ 專責崗位名單", type=['cs
 
 st.divider()
 
-# 將老師姓名轉換為 "姓名(簡稱)" 的輔助函數
 def format_teacher_name(name, teachers_dict):
     info = teachers_dict.get(name, {})
     short_name = info.get('short_name', '')
@@ -236,11 +262,14 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 df_fixed = read_csv_auto(file_fixed)
                 
                 scheduler = DutyScheduler(df_teachers, df_timetable, df_locations, df_coplanning, df_subjects, df_fixed)
-                odd_schedule, odd_scores = scheduler.run_scheduler('單週')
-                even_schedule, even_scores = scheduler.run_scheduler('雙週')
+                
+                # 執行排表，獲得常規工作量與加權參考分
+                odd_schedule, odd_reg, odd_ref = scheduler.run_scheduler('單週')
+                even_schedule, even_reg, even_ref = scheduler.run_scheduler('雙週')
+                
                 st.success("✅ 單雙週編排雙軌完成！")
 
-                tab1, tab2, tab3 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (單/雙週)"])
+                tab1, tab2, tab3 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (常規 / 參考)"])
                 
                 with tab1:
                     odd_list = [{"崗位": k.replace('_單週',''), "負責老師": ", ".join([format_teacher_name(t, scheduler.teachers) for t in v])} for k, v in odd_schedule.items()]
@@ -249,8 +278,24 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     even_list = [{"崗位": k.replace('_雙週',''), "負責老師": ", ".join([format_teacher_name(t, scheduler.teachers) for t in v])} for k, v in even_schedule.items()]
                     st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
                 with tab3:
-                    scores_list = [{"老師姓名": format_teacher_name(name, scheduler.teachers), "職級": info['role'], "單週分數": odd_scores.get(name, 0), "雙週分數": even_scores.get(name, 0), "平均分數": (odd_scores.get(name, 0) + even_scores.get(name, 0)) / 2} for name, info in scheduler.teachers.items()]
-                    st.dataframe(pd.DataFrame(scores_list).sort_values(by="平均分數", ascending=False), use_container_width=True, hide_index=True)
+                    scores_list = []
+                    for name, info in scheduler.teachers.items():
+                        # 計算單雙週的午膳次數：(參考分 - 常規分) / 2
+                        odd_lunch_count = (odd_ref.get(name, 0) - odd_reg.get(name, 0)) / 2
+                        even_lunch_count = (even_ref.get(name, 0) - even_reg.get(name, 0)) / 2
+                        
+                        scores_list.append({
+                            "老師姓名": format_teacher_name(name, scheduler.teachers),
+                            "職級": info['role'],
+                            "常規工作量 (單週)": odd_reg.get(name, 0),
+                            "常規工作量 (雙週)": even_reg.get(name, 0),
+                            "常規平均工作量": (odd_reg.get(name, 0) + even_reg.get(name, 0)) / 2,
+                            "單週午膳次數 (不計分)": int(odd_lunch_count),
+                            "雙週午膳次數 (不計分)": int(even_lunch_count),
+                            "加權參考總分 (含午膳+2)": (odd_ref.get(name, 0) + even_ref.get(name, 0)) / 2
+                        })
+                    df_scores = pd.DataFrame(scores_list).sort_values(by="加權參考總分 (含午膳+2)", ascending=False)
+                    st.dataframe(df_scores, use_container_width=True, hide_index=True)
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
                 st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確。")
