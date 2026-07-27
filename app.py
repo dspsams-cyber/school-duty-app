@@ -2,15 +2,16 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (支援一年級入班當值 & 每週放學隊專責)
+# 核心排表邏輯 (完全體：6大檔案 + 專責老師全面豁免)
 # ==========================================
 class DutyScheduler:
-    def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df):
+    def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
         self.teachers = self._process_teachers(teachers_df)
         self.timetable = self._process_timetable(timetable_df)
         self.locations = self._process_locations(locations_df)
         self.coplanning = self._process_coplanning(coplanning_df)
         self.subjects = self._process_subjects(subjects_df)
+        self.fixed_duties_map, self.fixed_teachers = self._process_fixed_duties(fixed_duties_df)
         self.duties = self._define_duties()
         
     def _process_teachers(self, df):
@@ -61,6 +62,19 @@ class DutyScheduler:
                 subjects[class_name] = list(df[df['班別'] == class_name]['老師姓名'].unique())
         return subjects
 
+    # 新增: 處理專責崗位名單
+    def _process_fixed_duties(self, df):
+        fd_map = {}
+        f_teachers = set()
+        if not df.empty and '崗位名稱' in df.columns and '負責老師' in df.columns:
+            for _, row in df.iterrows():
+                duty_name = str(row.get('崗位名稱', '')).strip()
+                teacher = str(row.get('負責老師', '')).strip()
+                if duty_name and teacher:
+                    fd_map[duty_name] = teacher
+                    f_teachers.add(teacher)
+        return fd_map, f_teachers
+
     def _define_duties(self):
         duties = {}
         days = ['星期一', '星期二', '星期三', '星期四', '星期五']
@@ -77,10 +91,12 @@ class DutyScheduler:
             for duty, (count, weight) in morning_slots.items():
                 duties[f'{day}_{duty}_單週'] = {'weight': weight, 'roles': ['副校', '主任'], 'headcount': count}
                 duties[f'{day}_{duty}_雙週'] = {'weight': weight, 'roles': ['副校', '主任'], 'headcount': count}
-                if '雨天操場持咪' in duty:
-                    duties[f'{day}_{duty}_單週']['fixed_teacher'], duties[f'{day}_{duty}_雙週']['fixed_teacher'] = ['陳淑怡'], ['陳淑怡']
-                if '宣佈' in duty:
-                    duties[f'{day}_{duty}_單週']['fixed_teacher'], duties[f'{day}_{duty}_雙週']['fixed_teacher'] = ['謝翠琳'], ['謝翠琳']
+                
+                # 自動套用上傳的專責老師名單
+                for fixed_duty_key, fixed_teacher in self.fixed_duties_map.items():
+                    if fixed_duty_key in duty:
+                        duties[f'{day}_{duty}_單週']['fixed_teacher'] = [fixed_teacher]
+                        duties[f'{day}_{duty}_雙週']['fixed_teacher'] = [fixed_teacher]
         
         # 2. 一年級入班當值 (0.5分)
         grade_1_classes = [cls for cls in self.subjects.keys() if str(cls).startswith('1')]
@@ -111,6 +127,11 @@ class DutyScheduler:
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
         info = self.teachers.get(teacher_name, {})
         
+        # 【全新機制】專責老師 (陳淑怡、謝翠琳等) 享有「全面豁免權」
+        # 他們不會被安排到任何非專責的動態排班崗位 (包含入班、小息、午膳、放學及放學隊)
+        if teacher_name in self.fixed_teachers:
+            return True
+            
         # 共備豁免 (早會及入班當值)
         if "早上" in duty_name or "入班當值" in duty_name:
             if day in self.coplanning[week_type] and teacher_name in self.coplanning[week_type][day]: 
@@ -133,7 +154,6 @@ class DutyScheduler:
         
         weekly_afternoon_teachers = set()
 
-        # 將「全週」崗位排在最前面優先分配
         sorted_duties = sorted(week_specific_duties.items(), key=lambda x: 0 if '全週' in x[0] else 1)
 
         for duty, details in sorted_duties:
@@ -144,22 +164,18 @@ class DutyScheduler:
                 assigned = details['fixed_teacher']
             elif details.get('class_specific'):
                 cls = details['class_specific']
-                # 優先找無共備的班主任 (只取1位最低分的)
                 class_teachers = [name for name, info in self.teachers.items() if info.get('class_name') == cls]
                 available_ct = [t for t in class_teachers if not self.is_teacher_unavailable(t, day, duty, week_type)]
                 if available_ct:
                     available_ct.sort(key=lambda n: scores.get(n, 0))
                     assigned = [available_ct[0]]
                 else:
-                    # 若班主任都有共備，則找無共備的科任老師頂替
                     backup_teachers = [t for t in self.subjects.get(cls, []) if not self.is_teacher_unavailable(t, day, duty, week_type)]
                     backup_teachers.sort(key=lambda n: scores.get(n, 0))
-                    if backup_teachers: 
-                        assigned = [backup_teachers[0]]
+                    if backup_teachers: assigned = [backup_teachers[0]]
             else:
                 candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type)]
                 
-                # 如果老師被編入「全週放學隊」，則不應再被派去其他的「每日放學當值」
                 if '放學' in duty and '全週' not in duty:
                     candidates = [c for c in candidates if c not in weekly_afternoon_teachers]
                     
@@ -180,23 +196,27 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統")
-st.markdown("系統已內置**智能入班(一年級)**與**每週放學隊**等最新規則。請上傳 5 份核心資料。")
+st.title("🏫 訓導處當值表自動編排系統 (完全資料驅動版)")
+st.markdown("系統已搭載最強引擎，專責老師獲得全面豁免。請上傳 6 份核心資料：")
 st.divider()
 
-cols = st.columns(5)
-files = {"1️⃣ 老師名單": "teachers_list.csv", "2️⃣ 課堂時間表": "timetable.csv", "3️⃣ 課室樓層表": "class_locations.csv", "4️⃣ 共備名單": "co_planning.csv", "5️⃣ 主科任教名單": "subject_teachers.csv"}
-uploaded_files = {}
-for i, (header, fname) in enumerate(files.items()):
-    with cols[i]:
-        st.subheader(header)
-        uploaded_files[fname] = st.file_uploader(f"上傳 {fname}", type=['csv'])
+# 排版為 2 列 x 3 欄
+col1, col2, col3 = st.columns(3)
+with col1: file_teachers = st.file_uploader("1️⃣ 老師名單", type=['csv'])
+with col2: file_timetable = st.file_uploader("2️⃣ 課堂時間表", type=['csv'])
+with col3: file_locations = st.file_uploader("3️⃣ 課室樓層表", type=['csv'])
+
+col4, col5, col6 = st.columns(3)
+with col4: file_coplanning = st.file_uploader("4️⃣ 共備名單", type=['csv'])
+with col5: file_subjects = st.file_uploader("5️⃣ 主科任教名單", type=['csv'])
+with col6: file_fixed = st.file_uploader("6️⃣ 專責崗位名單", type=['csv'])
 
 st.divider()
 
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
-    if all(uploaded_files.values()):
-        with st.spinner('系統正在為「單週」與「雙週」進行最終運算...'):
+    # 檢查 6 個檔案是否都上傳
+    if file_teachers and file_timetable and file_locations and file_coplanning and file_subjects and file_fixed:
+        with st.spinner('系統正啟動最高權限引擎，為「單週」與「雙週」進行最終運算...'):
             try:
                 def read_csv_auto(file):
                     try: return pd.read_csv(file, encoding='utf-8')
@@ -206,9 +226,14 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                         except UnicodeDecodeError:
                             file.seek(0); return pd.read_csv(file, encoding='cp950')
 
-                dfs = {fname: read_csv_auto(file) for fname, file in uploaded_files.items()}
+                df_teachers = read_csv_auto(file_teachers)
+                df_timetable = read_csv_auto(file_timetable)
+                df_locations = read_csv_auto(file_locations)
+                df_coplanning = read_csv_auto(file_coplanning)
+                df_subjects = read_csv_auto(file_subjects)
+                df_fixed = read_csv_auto(file_fixed)
                 
-                scheduler = DutyScheduler(dfs['teachers_list.csv'], dfs['timetable.csv'], dfs['class_locations.csv'], dfs['co_planning.csv'], dfs['subject_teachers.csv'])
+                scheduler = DutyScheduler(df_teachers, df_timetable, df_locations, df_coplanning, df_subjects, df_fixed)
                 odd_schedule, odd_scores = scheduler.run_scheduler('單週')
                 even_schedule, even_scores = scheduler.run_scheduler('雙週')
                 st.success("✅ 單雙週編排雙軌完成！")
@@ -223,6 +248,6 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     st.dataframe(pd.DataFrame(scores_list).sort_values(by="平均分數", ascending=False), use_container_width=True, hide_index=True)
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的5份 CSV 檔案格式與欄位名稱是否正確。")
+                st.info("請確認您的6份 CSV 檔案格式與欄位名稱是否正確。")
     else:
-        st.warning("⚠️ 請先在上方上傳所有 5 個必要的 CSV 檔案！")
+        st.warning("⚠️ 請先在上方上傳所有 6 個必要的 CSV 檔案！")
