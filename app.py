@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體：6大檔案 + 專責老師全面豁免 + 簡稱顯示)
+# 核心排表邏輯 (完全體：6大檔案 + 專責老師全面豁免 + 簡稱顯示 + 午膳2分)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -108,11 +108,11 @@ class DutyScheduler:
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_單週'] = {'weight': 0.5, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_雙週'] = {'weight': 0.5, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
 
-        # 3. 小息、午膳、放學 (1.0分)
+        # 3. 小息(1.0分)、午膳(2.0分)、放學(1.0分)
         other_slots = {
             "小息一_6樓": (2, 1.0), "小息一_5樓": (2, 1.0), "小息一_4樓": (2, 1.0), "小息一_2樓": (2, 1.0), "小息一_地下": (2, 1.0), "小息一_3樓": (1, 1.0), "小息一_1樓前後梯": (1, 1.0),
             "小息二_6樓": (2, 1.0), "小息二_5樓": (2, 1.0), "小息二_4樓": (2, 1.0), "小息二_2樓": (2, 1.0), "小息二_地下": (2, 1.0), "小息二_3樓": (1, 1.0), "小息二_1樓前後梯": (1, 1.0),
-            "午膳二_6樓": (2, 1.0), "午膳二_5樓": (2, 1.0), "午膳二_4樓": (2, 1.0), "午膳二_3樓": (2, 1.0), "午膳二_2樓": (2, 1.0), "午膳二_地下": (3, 1.0),
+            "午膳二_6樓": (2, 2.0), "午膳二_5樓": (2, 2.0), "午膳二_4樓": (2, 2.0), "午膳二_3樓": (2, 2.0), "午膳二_2樓": (2, 2.0), "午膳二_地下": (3, 2.0),
             "放學_雨天操場持咪": (1, 1.0), "放學_家長隊(雨天操場)1": (1, 1.0), "放學_家長隊(雨天操場)2": (1, 1.0), "放學_大閘(外)": (1, 1.0), "放學_新翼持咪": (1, 1.0), "放學_正門大閘": (1, 1.0)
         }
         for day in days:
@@ -165,94 +165,4 @@ class DutyScheduler:
                 class_teachers = [name for name, info in self.teachers.items() if info.get('class_name') == cls]
                 available_ct = [t for t in class_teachers if not self.is_teacher_unavailable(t, day, duty, week_type)]
                 if available_ct:
-                    available_ct.sort(key=lambda n: scores.get(n, 0))
-                    assigned = [available_ct[0]]
-                else:
-                    backup_teachers = [t for t in self.subjects.get(cls, []) if not self.is_teacher_unavailable(t, day, duty, week_type)]
-                    backup_teachers.sort(key=lambda n: scores.get(n, 0))
-                    if backup_teachers: assigned = [backup_teachers[0]]
-            else:
-                candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type)]
-                if '放學' in duty and '全週' not in duty:
-                    candidates = [c for c in candidates if c not in weekly_afternoon_teachers]
-                    
-                candidates.sort(key=lambda n: scores.get(n, 0))
-                assigned = candidates[:details['headcount']]
-            
-            schedule[duty] = assigned
-            for teacher in assigned:
-                if teacher in scores: scores[teacher] += details['weight']
-                    
-            if '全週_放學隊' in duty:
-                weekly_afternoon_teachers.update(assigned)
-                
-        return schedule, scores
-
-# ==========================================
-# 網頁介面設計 (Streamlit)
-# ==========================================
-st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (完全資料驅動版)")
-st.markdown("系統已內置**所有崗位及豁免規則**，結果將會顯示「姓名(簡稱)」。請上傳 6 份核心資料：")
-st.divider()
-
-col1, col2, col3 = st.columns(3)
-with col1: file_teachers = st.file_uploader("1️⃣ 老師名單", type=['csv'])
-with col2: file_timetable = st.file_uploader("2️⃣ 課堂時間表", type=['csv'])
-with col3: file_locations = st.file_uploader("3️⃣ 課室樓層表", type=['csv'])
-
-col4, col5, col6 = st.columns(3)
-with col4: file_coplanning = st.file_uploader("4️⃣ 共備名單", type=['csv'])
-with col5: file_subjects = st.file_uploader("5️⃣ 主科任教名單", type=['csv'])
-with col6: file_fixed = st.file_uploader("6️⃣ 專責崗位名單", type=['csv'])
-
-st.divider()
-
-# 將老師姓名轉換為 "姓名(簡稱)" 的輔助函數
-def format_teacher_name(name, teachers_dict):
-    info = teachers_dict.get(name, {})
-    short_name = info.get('short_name', '')
-    if short_name:
-        return f"{name}({short_name})"
-    return name
-
-if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
-    if file_teachers and file_timetable and file_locations and file_coplanning and file_subjects and file_fixed:
-        with st.spinner('系統正啟動最高權限引擎，為「單週」與「雙週」進行最終運算...'):
-            try:
-                def read_csv_auto(file):
-                    try: return pd.read_csv(file, encoding='utf-8')
-                    except UnicodeDecodeError:
-                        file.seek(0)
-                        try: return pd.read_csv(file, encoding='big5')
-                        except UnicodeDecodeError:
-                            file.seek(0); return pd.read_csv(file, encoding='cp950')
-
-                df_teachers = read_csv_auto(file_teachers)
-                df_timetable = read_csv_auto(file_timetable)
-                df_locations = read_csv_auto(file_locations)
-                df_coplanning = read_csv_auto(file_coplanning)
-                df_subjects = read_csv_auto(file_subjects)
-                df_fixed = read_csv_auto(file_fixed)
-                
-                scheduler = DutyScheduler(df_teachers, df_timetable, df_locations, df_coplanning, df_subjects, df_fixed)
-                odd_schedule, odd_scores = scheduler.run_scheduler('單週')
-                even_schedule, even_scores = scheduler.run_scheduler('雙週')
-                st.success("✅ 單雙週編排雙軌完成！")
-
-                tab1, tab2, tab3 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (單/雙週)"])
-                
-                with tab1:
-                    odd_list = [{"崗位": k.replace('_單週',''), "負責老師": ", ".join([format_teacher_name(t, scheduler.teachers) for t in v])} for k, v in odd_schedule.items()]
-                    st.dataframe(pd.DataFrame(odd_list), use_container_width=True, hide_index=True)
-                with tab2:
-                    even_list = [{"崗位": k.replace('_雙週',''), "負責老師": ", ".join([format_teacher_name(t, scheduler.teachers) for t in v])} for k, v in even_schedule.items()]
-                    st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
-                with tab3:
-                    scores_list = [{"老師姓名": format_teacher_name(name, scheduler.teachers), "職級": info['role'], "單週分數": odd_scores.get(name, 0), "雙週分數": even_scores.get(name, 0), "平均分數": (odd_scores.get(name, 0) + even_scores.get(name, 0)) / 2} for name, info in scheduler.teachers.items()]
-                    st.dataframe(pd.DataFrame(scores_list).sort_values(by="平均分數", ascending=False), use_container_width=True, hide_index=True)
-            except Exception as e:
-                st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確。")
-    else:
-        st.warning("⚠️ 請先在上方上傳所有 6 個必要的 CSV 檔案！")
+                    availabl
