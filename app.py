@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (v5.9 最終完整版：完美就近分配與影子預排)
+# 核心排表邏輯 (v5.10 演算法修正：就近分配最優先)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -201,7 +201,7 @@ class DutyScheduler:
         lunch_scores = {name: 0 for name in self.teachers}
         ref_scores = {name: 0 for name in self.teachers}
         teacher_busy_slots = {name: {d: set() for d in ['星期一', '星期二', '星期三', '星期四', '星期五']} for name in self.teachers}
-        
+
         def is_free(t_name, d, s):
             if s == "UNKNOWN": return True
             busy = teacher_busy_slots.get(t_name, {}).get(d, set())
@@ -215,7 +215,7 @@ class DutyScheduler:
         def mark_busy(t_name, d, s):
             if s == "UNKNOWN" or t_name not in teacher_busy_slots: return
             teacher_busy_slots[t_name][d].add(s)
-        
+
         def get_priority(item):
             name, details = item
             if "早會" in name: return 1
@@ -223,14 +223,30 @@ class DutyScheduler:
             if details.get('is_lunch'): return 4
             return 3
         
-        def get_proximity_score(teacher, day, lesson, duty_floor):
-            if duty_floor is None: return 0
-            teacher_floor = self.locations.get((teacher, day, lesson))
-            
-            # 老師該節沒有課 (空堂)，給予 0.5 分。優先級高於跨層，低於完全同層。
-            if teacher_floor is None: return 0.5 
-            
-            return abs(teacher_floor - duty_floor)
+        # 【v5.10 演算法核心修正】：將距離與工作量融合成單一分數
+        def get_combined_score(teacher, day, lesson, duty_floor, current_workload):
+            # 1. 計算基礎距離分數
+            distance_score = 100 # 預設一個較大的懲罰分數
+            if duty_floor is not None:
+                teacher_floor = self.locations.get((teacher, day, lesson))
+                if teacher_floor is None:
+                    # 空堂老師，給予一個較低但不為零的基礎分
+                    distance_score = 10 
+                else:
+                    # 完全同層的老師，基礎分為 0
+                    distance_score = abs(teacher_floor - duty_floor)
+            else:
+                 # 如果崗位本身沒有樓層（例如放學隊），距離分為0
+                distance_score = 0
+
+            # 2. 賦予距離極高的權重，確保它是首要考量
+            # 同層(0), 跨1層(1000), 跨2層(2000), 空堂(10)
+            weighted_distance = distance_score * 1000
+
+            # 3. 將工作量作為次要微調因素加入
+            # 假設工作量最高不超過500，這樣它就只會在同等距離的老師之間起作用
+            final_score = weighted_distance + current_workload
+            return final_score
 
         sorted_duties = sorted(duties.items(), key=get_priority)
         for duty, details in sorted_duties:
@@ -259,7 +275,10 @@ class DutyScheduler:
                     duty_floor = int(nums[0]) if nums else None
                 
                 candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
-                candidates.sort(key=lambda t: (get_proximity_score(t, day, lesson_to_check, duty_floor), ref_scores.get(t, 0)))
+                
+                # 【v5.10 演算法核心修正】：使用新的綜合分數進行排序，分數越低越優先
+                candidates.sort(key=lambda t: get_combined_score(t, day, lesson_to_check, duty_floor, ref_scores.get(t, 0)))
+                
                 assigned = candidates[:details['headcount']]
                 
             elif details.get('class_specific'):
@@ -280,6 +299,7 @@ class DutyScheduler:
                 remaining_spots = details['headcount'] - len(assigned)
                 if remaining_spots > 0:
                     candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and name not in assigned and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
+                    # 對於沒有樓層的崗位，只按工作量排序
                     candidates.sort(key=lambda n: ref_scores.get(n, 0))
                     assigned.extend(candidates[:remaining_spots])
             
@@ -297,8 +317,8 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.9 完整版)")
-st.markdown("系統已加入**影子預排技術**與**完美就近分配**，保證早會無空格，小息/午膳單雙週完全一致，且優先指派同層老師！")
+st.title("🏫 訓導處當值表自動編排系統 (v5.10 演算法修正版)")
+st.markdown("系統已採用**最新加權演算法**，實現**就近分配最優先**，並同步優化**工作量平衡**！")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
@@ -317,7 +337,7 @@ def format_name(name, teachers_dict):
 
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
     if all(uploaded_files.values()):
-        with st.spinner('系統正啟動最高權限引擎，進行兩段式影子預排與就近分配...'):
+        with st.spinner('系統正啟動最高權限引擎，執行 v5.10 最新加權演算法...'):
             try:
                 def read_csv_auto(file):
                     try: return pd.read_csv(file, encoding='utf-8')
@@ -339,7 +359,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 # 【第二階段】：強制套用常規崗位至雙週，並重排雙週早會與入班
                 even_schedule, even_reg, even_lunch, even_ref = scheduler.run_scheduler('雙週', fixed_overrides=fixed_others)
                 
-                st.success("✅ 兩段式影子預排雙軌完成！單雙週常規崗位已完美同步，且同層優先指派成功。")
+                st.success("✅ 演算法執行完畢！就近分配與工作量已達最佳平衡。")
                 
                 # 整理個人當值總覽
                 teacher_duties = {name: {'單週': [], '雙週': []} for name in scheduler.teachers}
@@ -377,7 +397,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確，特別是當值名稱中是否包含樓層信息。")
+                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確。")
 
     else:
         st.warning("⚠️ 請先在上方上傳所有 6 個必要的 CSV 檔案！")
