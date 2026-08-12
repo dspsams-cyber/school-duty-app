@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體 v4.0：完美單雙週共備豁免 + 新增客製化條件)
+# 核心排表邏輯 (完全體 v4.2：精準人數配置與時段防衝突鎖)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -56,7 +56,7 @@ class DutyScheduler:
                 day = str(row.get('星期','')).strip()
                 week = str(row.get('週次','')).strip()
                 
-                # 【修改】嚴格區分單週與雙週名單
+                # 嚴格區分單週與雙週名單
                 if name and day in cp['單週']:
                     if week == '單週': cp['單週'][day].append(name)
                     if week == '雙週': cp['雙週'][day].append(name)
@@ -89,9 +89,9 @@ class DutyScheduler:
             "早會_雨天操場_7:55-8:20": (2, 25),
             "早會_詢問處_7:30-7:55": (2, 25),
             "早會_詢問處_7:55-8:20": (3, 25),
-            "早會_正門大閘_7:30-7:55": (2, 25),
+            "早會_正門大閘_7:30-7:55": (2, 25), # 確定為 2 人配置
             "早會_正門大閘_7:55-8:20": (3, 25),
-            "早會_雨天操場持咪_7:55-8:20": (2, 25), # 【條件2】改為需要多一個人（共兩人）
+            "早會_雨天操場持咪_7:55-8:20": (1, 25), # 修正回 1 人 (專責老師專屬)
             "早會_宣佈_8:15-8:35": (1, 20)
         }
         
@@ -153,16 +153,22 @@ class DutyScheduler:
         # 專責老師在普通池的判定
         if teacher_name in self.fixed_teachers: return True
         
-        # 【完美修復】：精準捕捉所有「早會」及「入班當值」崗位，依據 week_type (單週/雙週) 嚴格剔除
+        # 單雙週共備嚴格豁免
         if "早會" in duty_name or "入班當值" in duty_name:
             if day in self.coplanning.get(week_type, {}) and teacher_name in self.coplanning[week_type].get(day, []): 
                 return True
                 
-        # 【新增條件 1】楊不能在 7:30-7:55 的時段當值
+        # 條件 1：楊不能在 7:30-7:55 的時段當值
         if "7:30-7:55" in duty_name and "楊" in teacher_name:
             return True
             
-        # 【新增條件 3】特定日子特定老師免午膳當值
+        # 新增條件：負責「宣佈」的老師不能在 7:55-8:20 站崗
+        if "7:55-8:20" in duty_name:
+            announcer = self.fixed_duties_map.get("宣佈", "")
+            if announcer and announcer == teacher_name:
+                return True
+            
+        # 條件 3：特定日子特定老師免午膳當值
         if "午膳" in duty_name:
             if day == "星期一" and "浩" in teacher_name:
                 return True
@@ -196,7 +202,7 @@ class DutyScheduler:
             day = duty.split('_')[0]
             assigned = []
             
-            # 【修復補人邏輯】：讓專責老師先進去，剩下空缺由普通候選人補上
+            # 專責老師與普通候選人動態補人邏輯
             if details.get('class_specific'):
                 cls = details['class_specific']
                 class_teachers = [name for name, info in self.teachers.items() if info.get('class_name') == cls]
@@ -209,11 +215,11 @@ class DutyScheduler:
                     backup.sort(key=lambda n: ref_scores.get(n, 0))
                     if backup: assigned = [backup[0]]
             else:
-                # 專責崗位的人先進場
+                # 1. 專責崗位的人先進場
                 if details.get('fixed_teacher'):
                     assigned.extend(details['fixed_teacher'])
                 
-                # 若還有空缺（例如雨天操場持咪現在要 2 人，fixed_teacher 只有 1 個，還差 1 個）
+                # 2. 若還有空缺，由普通老師補齊
                 remaining_spots = details['headcount'] - len(assigned)
                 if remaining_spots > 0:
                     candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and name not in assigned and not self.is_teacher_unavailable(name, day, duty, week_type)]
@@ -240,7 +246,7 @@ class DutyScheduler:
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
 st.title("🏫 訓導處當值表自動編排系統 (以「分鐘」精準計分版)")
-st.markdown("系統已自動分析各崗位所需時間，並加入**單雙週共備嚴格豁免**及各項**客製化免除條件**。")
+st.markdown("系統已自動分析各崗位所需時間，並加入**單雙週共備嚴格豁免**、**宣佈老師防衝突鎖**及各項**客製化免除條件**。")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
