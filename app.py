@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體 v4.8：修復放學變數未定義錯誤)
+# 核心排表邏輯 (完全體 v4.9：每日放學隊獨立編排與精準計分)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -121,7 +121,7 @@ class DutyScheduler:
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_單週'] = {'weight': 20, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_雙週'] = {'weight': 20, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
                 
-        # 3. 小息(15分)、午膳(30分)、放學(20分)
+        # 3. 小息(15分)、午膳(30分)、其他放學(20分)
         other_slots = {
             "小息一_6樓_9:45-10:00": (1, 15), "小息一_5樓_9:45-10:00": (1, 15), "小息一_4樓_9:45-10:00": (1, 15),
             "小息一_2樓_9:45-10:00": (1, 15), "小息一_地下_9:45-10:00": (1, 15), "小息一_3樓_9:45-10:00": (1, 15),
@@ -141,10 +141,11 @@ class DutyScheduler:
                 roles = ['班主任', '非班主任'] if '小息' in duty else (['副校', '主任'] if '放學_' in duty else ['副校', '主任', '非班主任'])
                 duties[f'{day}_{duty}'] = {'weight': weight, 'roles': roles, 'headcount': count, 'is_lunch': '午膳' in duty}
                 
-        # 4. 全週放學隊
+        # 4. 【徹底改寫】每日獨立放學隊 (星期一至五，A-F路線每日打散，獨立計 20 分)
         team_lead_routes = ["A", "B", "C", "D", "E", "F"]
-        for route in team_lead_routes:
-            duties[f'全週_放學隊_{route}_15:25-15:45'] = {'weight': 20, 'roles': ['班主任', '非班主任'], 'headcount': 1}
+        for day in days:
+            for route in team_lead_routes:
+                duties[f'{day}_放學隊_{route}_15:25-15:45'] = {'weight': 20, 'roles': ['班主任', '非班主任'], 'headcount': 1}
         return duties
 
     # 時段分類器，負責萃取崗位的時間段
@@ -161,6 +162,7 @@ class DutyScheduler:
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
         info = self.teachers.get(teacher_name, {})
         
+        # 專責老師在普通池的判定
         if teacher_name in self.fixed_teachers: return True
         
         # 單雙週共備嚴格豁免
@@ -200,41 +202,36 @@ class DutyScheduler:
         lunch_scores = {name: 0 for name in self.teachers}
         ref_scores = {name: 0 for name in self.teachers}
         
-        # 【重要修正】初始化宣告放學防重複追蹤名單，解決未定義錯誤！
-        weekly_afternoon_teachers = set()
-        
-        # 每日時段佔用追蹤器
+        # 每日時段佔用追蹤器 (完美取代原本的 weekly_afternoon_teachers)
         teacher_busy_slots = {name: {d: set() for d in ['星期一', '星期二', '星期三', '星期四', '星期五']} for name in self.teachers}
         
         def is_free(t_name, d, s):
             if s == "UNKNOWN": return True
-            days_to_check = ['星期一', '星期二', '星期三', '星期四', '星期五'] if d == '全週' else [d]
-            for check_day in days_to_check:
-                busy = teacher_busy_slots.get(t_name, {}).get(check_day, set())
-                if s in busy: return False
-                
-                # 防禦 M2(7:55) 與 M3(8:15) 的重疊
-                if s == "M2" and "M3" in busy: return False
-                if s == "M3" and "M2" in busy: return False
-                
-                # 防禦 M1(7:30) 與 M2(7:55/入班) 連續當值，避免站 50 分鐘
-                if s == "M1" and "M2" in busy: return False
-                if s == "M2" and "M1" in busy: return False
-                
+            # 因為已無全週崗位，直接檢查當天 (d) 的佔用狀況即可
+            busy = teacher_busy_slots.get(t_name, {}).get(d, set())
+            if s in busy: return False
+            
+            # 防禦 M2(7:55) 與 M3(8:15) 的重疊
+            if s == "M2" and "M3" in busy: return False
+            if s == "M3" and "M2" in busy: return False
+            
+            # 防禦 M1(7:30) 與 M2(7:55/入班) 連續當值，避免站 50 分鐘
+            if s == "M1" and "M2" in busy: return False
+            if s == "M2" and "M1" in busy: return False
+            
             return True
 
         def mark_busy(t_name, d, s):
             if s == "UNKNOWN": return
-            days_to_mark = ['星期一', '星期二', '星期三', '星期四', '星期五'] if d == '全週' else [d]
-            for mark_day in days_to_mark:
-                if t_name in teacher_busy_slots:
-                    teacher_busy_slots[t_name][mark_day].add(s)
+            if t_name in teacher_busy_slots:
+                teacher_busy_slots[t_name][d].add(s)
         
+        # 保證入班當值最高優先級
         def get_priority(item):
             name, details = item
-            if '全週' in name: return 0
-            if details.get('is_lunch'): return 2
-            return 1
+            if details.get('class_specific'): return 1 # 第一優先：入班當值
+            if details.get('is_lunch'): return 3       # 最後排：午膳
+            return 2                                   # 第二優先：其他早會、小息、單日放學等
             
         sorted_duties = sorted(duties.items(), key=get_priority)
         for duty, details in sorted_duties:
@@ -242,6 +239,7 @@ class DutyScheduler:
             slot = self._get_duty_slot(duty)
             assigned = []
             
+            # 專責老師與普通候選人動態補人邏輯
             if details.get('class_specific'):
                 cls = details['class_specific']
                 class_teachers = [name for name, info in self.teachers.items() if info.get('class_name') == cls]
@@ -254,17 +252,17 @@ class DutyScheduler:
                     backup.sort(key=lambda n: ref_scores.get(n, 0))
                     if backup: assigned = [backup[0]]
             else:
+                # 1. 專責崗位的人先進場
                 if details.get('fixed_teacher'):
                     assigned.extend(details['fixed_teacher'])
                     # 專責老師雖然強制排入，但也要標記佔用時段，以免系統把他們排去別的時段
                     for t in details['fixed_teacher']:
                         mark_busy(t, day, slot)
                 
+                # 2. 若還有空缺，由普通老師補齊
                 remaining_spots = details['headcount'] - len(assigned)
                 if remaining_spots > 0:
                     candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and name not in assigned and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
-                    if '放學' in duty and '全週' not in duty: 
-                        candidates = [c for c in candidates if c not in weekly_afternoon_teachers]
                     candidates.sort(key=lambda n: ref_scores.get(n, 0))
                     assigned.extend(candidates[:remaining_spots])
             
@@ -279,8 +277,6 @@ class DutyScheduler:
                         lunch_scores[teacher] += details['weight']
                     else:
                         reg_scores[teacher] += details['weight']
-            
-            if '全週_放學隊' in duty: weekly_afternoon_teachers.update(assigned)
                 
         return schedule, reg_scores, lunch_scores, ref_scores
 
@@ -289,7 +285,7 @@ class DutyScheduler:
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
 st.title("🏫 訓導處當值表自動編排系統 (以「分鐘」精準計分版)")
-st.markdown("系統已加入**同日同時段防分身**及**早會防連續當值**機制，確保老師工作分配公平且人性化。")
+st.markdown("系統已加入**每日獨立放學隊**、**入班優先排程邏輯**、**同日同時段防分身**及**早會防連續當值**機制。")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
