@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (v5.12：智能解碼中文漢字節數)
+# 核心排表邏輯 (v5.13：更新當值人數 + 嚴格樓層排序顯示)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -27,7 +27,7 @@ class DutyScheduler:
             if info['short_name'] and info['short_name'].lower() == query_name.lower():
                 return full_name
                 
-        # 嘗試子字串配對 (例如 "王大明(WM)" 配對 "王大明")
+        # 嘗試子字串配對
         for full_name, info in self.teachers.items():
             if query_name in full_name or full_name in query_name:
                 return full_name
@@ -44,19 +44,14 @@ class DutyScheduler:
         if '五' in d_str or '5' in d_str or 'FRI' in d_str: return '星期五'
         return d_str
 
-    # 【新增】：中文漢字節數解碼器
+    # 中文漢字節數解碼器
     def decode_chinese_lesson(self, lesson_str):
         lesson_str = str(lesson_str).strip()
-        # 如果裡面本來就有阿拉伯數字，直接萃取
         nums = re.findall(r'\d+', lesson_str)
         if nums:
             return int(nums[0])
         
-        # 中文數字對照表
-        cn_map = {
-            '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, 
-            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10
-        }
+        cn_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
         for char, val in cn_map.items():
             if char in lesson_str:
                 return val
@@ -98,7 +93,6 @@ class DutyScheduler:
                 lesson_raw = r.get('節數', '')
                 floor_raw = str(r.get('樓層', ''))
                 
-                # 使用中文漢字節數解碼器
                 lesson_val = self.decode_chinese_lesson(lesson_raw)
                 if not matched_name or not day or lesson_val is None:
                     continue
@@ -150,6 +144,7 @@ class DutyScheduler:
         duties = {}
         days = ['星期一', '星期二', '星期三', '星期四', '星期五']
         
+        # 【v5.13 更新】：修改為指定之小息與午膳人數
         all_slots = {
             "早會_雨天操場_7:30-7:55": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
             "早會_雨天操場_7:55-8:20": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
@@ -159,26 +154,33 @@ class DutyScheduler:
             "早會_正門大閘_7:55-8:20": {"count": 3, "weight": 25, "roles": ['副校', '主任']},
             "早會_雨天操場持咪_7:55-8:20": {"count": 1, "weight": 25, "roles": ['副校', '主任', '非班主任']},
             "早會_宣佈_8:15-8:35": {"count": 1, "weight": 20, "roles": ['副校', '主任', '非班主任']},
-            "小息一_6樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息一_5樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息一_4樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息一_2樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息一_地下_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            
+            # 小息一 (6樓->地下)
+            "小息一_6樓_9:45-10:00": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_5樓_9:45-10:00": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_4樓_9:45-10:00": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
             "小息一_3樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_2樓_9:45-10:00": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
             "小息一_1樓前後梯_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息二_6樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息二_5樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息二_4樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息二_2樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "小息二_地下_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_地下_9:45-10:00": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            
+            # 小息二 (6樓->地下)
+            "小息二_6樓_11:10-11:25": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_5樓_11:10-11:25": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_4樓_11:10-11:25": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
             "小息二_3樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_2樓_11:10-11:25": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
             "小息二_1樓前後梯_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
-            "午膳二_6樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
-            "午膳二_5樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
-            "午膳二_4樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
-            "午膳二_3樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
-            "午膳二_2樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
-            "午膳二_地下_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "小息二_地下_11:10-11:25": {"count": 2, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            
+            # 午膳二 (6樓->地下)
+            "午膳二_6樓_13:05-13:35": {"count": 2, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_5樓_13:05-13:35": {"count": 2, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_4樓_13:05-13:35": {"count": 2, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_3樓_13:05-13:35": {"count": 2, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_2樓_13:05-13:35": {"count": 2, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_地下_13:05-13:35": {"count": 3, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            
             "放學_雨天操場持咪_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
             "放學_家長隊(雨天操場)1_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
             "放學_家長隊(雨天操場)2_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
@@ -355,8 +357,8 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.12 漢字解碼版)")
-st.markdown("系統已加入**中文漢字節數自動解碼**（如第一節自動轉為1），保證就近分配100%完美生效！")
+st.title("🏫 訓導處當值表自動編排系統 (v5.13 最終排序版)")
+st.markdown("系統已加入**人數校準**與**嚴格樓層排序（6樓至地下）**，為您輸出最清晰易讀的排表結果！")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
@@ -373,6 +375,36 @@ def format_name(name, teachers_dict):
     s_name = info.get('short_name', '')
     return f"{name}({s_name})" if s_name else name
 
+# 【v5.13 新增】：嚴格樓層排序邏輯
+def get_display_sort_key(item_dict):
+    duty_name = item_dict.get("崗位", "")
+    
+    # 1. 星期排序 (1~5)
+    days = {'星期一': 1, '星期二': 2, '星期三': 3, '星期四': 4, '星期五': 5}
+    day_str = duty_name.split('_')[0] if '_' in duty_name else ""
+    day_order = days.get(day_str, 99)
+    
+    # 2. 時段排序 (早會->入班->小息一->小息二->午膳->放學)
+    time_order = 99
+    if "早會" in duty_name: time_order = 1
+    elif "入班當值" in duty_name: time_order = 2
+    elif "小息一" in duty_name: time_order = 3
+    elif "小息二" in duty_name: time_order = 4
+    elif "午膳" in duty_name: time_order = 5
+    elif "放學" in duty_name: time_order = 6
+    
+    # 3. 樓層排序 (6樓->5樓->...->地下)
+    floor_order = 99
+    if "6樓" in duty_name: floor_order = 1
+    elif "5樓" in duty_name: floor_order = 2
+    elif "4樓" in duty_name: floor_order = 3
+    elif "3樓" in duty_name: floor_order = 4
+    elif "2樓" in duty_name: floor_order = 5
+    elif "1樓" in duty_name: floor_order = 6
+    elif "地下" in duty_name: floor_order = 7
+
+    return (day_order, time_order, floor_order, duty_name)
+
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
     if all(uploaded_files.values()):
         with st.spinner('系統正解碼中文漢字節數，並進行影子預排分配...'):
@@ -388,18 +420,12 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 
                 scheduler = DutyScheduler(dfs['teachers_list.csv'], dfs['timetable.csv'], dfs['class_locations.csv'], dfs['co_planning.csv'], dfs['subject_teachers.csv'], dfs['fixed_duties.csv'])
                 
-                # 【第一階段】：影子預排 (以單週為基礎)
                 odd_schedule, odd_reg, odd_lunch, odd_ref = scheduler.run_scheduler('單週')
-                
-                # 擷取常規崗位 (小息、午膳、放學隊)，這些崗位在單雙週不應改變
                 fixed_others = {k: v for k, v in odd_schedule.items() if "小息" in k or "午膳" in k or "放學" in k}
-                
-                # 【第二階段】：強制套用常規崗位至雙週，並重排雙週早會與入班
                 even_schedule, even_reg, even_lunch, even_ref = scheduler.run_scheduler('雙週', fixed_overrides=fixed_others)
                 
                 st.success(f"🎉 演算法執行完畢！系統成功定位了 {len(scheduler.locations)} 筆上課位置，就近分配 100% 生效！")
                 
-                # 整理個人當值總覽
                 teacher_duties = {name: {'單週': [], '雙週': []} for name in scheduler.teachers}
                 for duty, assigned in odd_schedule.items():
                     for t in assigned:
@@ -416,12 +442,19 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                         "雙週當值崗位": ", ".join(sorted(teacher_duties[name]['雙週'])) if teacher_duties[name]['雙週'] else "無"
                     })
                 
+                # 將排表結果轉換為 List，並套用嚴格的樓層自定義排序
+                odd_list = [{"崗位": k.replace('_單週',''), "負責老師": ", ".join([format_name(t, scheduler.teachers) for t in v])} for k, v in odd_schedule.items()]
+                odd_list.sort(key=get_display_sort_key)
+                
+                even_list = [{"崗位": k.replace('_雙週',''), "負責老師": ", ".join([format_name(t, scheduler.teachers) for t in v])} for k, v in even_schedule.items()]
+                even_list.sort(key=get_display_sort_key)
+
                 tab1, tab2, tab3, tab4 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (分鐘數)", "👤 個人當值總覽"])
                 
                 with tab1:
-                    st.dataframe(pd.DataFrame([{"崗位": k.replace('_單週',''), "負責老師": ", ".join([format_name(t, scheduler.teachers) for t in v])} for k, v in odd_schedule.items()]), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(odd_list), use_container_width=True, hide_index=True)
                 with tab2:
-                    st.dataframe(pd.DataFrame([{"崗位": k.replace('_雙週',''), "負責老師": ", ".join([format_name(t, scheduler.teachers) for t in v])} for k, v in even_schedule.items()]), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
                 with tab3:
                     scores_list = [{
                         "老師姓名": format_name(name, scheduler.teachers), "職級": info['role'],
