@@ -2,13 +2,13 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體 v5.1：小息就近樓層優先 + 擴大職級)
+# 核心排表邏輯 (完全體 v5.2：徹底修復 headcount 缺失與智慧就近)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
         self.teachers = self._process_teachers(teachers_df)
         self.timetable = self._process_timetable(timetable_df)
-        self.locations = self._process_locations(locations_df) # 關鍵數據來源
+        self.locations = self._process_locations(locations_df)
         self.coplanning = self._process_coplanning(coplanning_df)
         self.subjects = self._process_subjects(subjects_df)
         self.fixed_duties_map, self.fixed_teachers = self._process_fixed_duties(fixed_duties_df)
@@ -42,7 +42,7 @@ class DutyScheduler:
         
     def _process_locations(self, df):
         if not df.empty and '老師姓名' in df.columns and '星期' in df.columns and '節數' in df.columns and '樓層' in df.columns:
-            # 將樓層轉換為數值，便於計算，並處理非數值錯誤
+            # 確保樓層能轉換為數值進行相減，非數值（如「地下」）會被轉為 NaN
             df['樓層_val'] = pd.to_numeric(df['樓層'], errors='coerce')
             return df.set_index(['老師姓名', '星期', '節數'])['樓層_val'].to_dict()
         return {}
@@ -139,8 +139,9 @@ class DutyScheduler:
         
         for day in days:
             for duty, (count, weight) in other_slots.items():
-                # 【關鍵修正】擴大所有小息崗位人才庫
+                # 擴大所有小息崗位人才庫至副校與主任
                 roles = ['副校', '主任', '班主任', '非班主任'] if '小息' in duty else (['副校', '主任'] if '放學_' in duty else ['副校', '主任', '非班主任'])
+                # 【修復】：將 Tuple 乾淨轉為 Dictionary 結構，確保 headcount key 絕對存在
                 duties[f'{day}_{duty}'] = {'weight': weight, 'roles': roles, 'headcount': count, 'is_lunch': '午膳' in duty}
                 
         # 4. 每日獨立放學隊
@@ -161,7 +162,6 @@ class DutyScheduler:
         return "UNKNOWN"
 
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
-        # ... (此函數邏輯不變) ...
         info = self.teachers.get(teacher_name, {})
         if teacher_name in self.fixed_teachers: return True
         if "早會" in duty_name or "入班當值" in duty_name:
@@ -191,7 +191,6 @@ class DutyScheduler:
         teacher_busy_slots = {name: {d: set() for d in ['星期一', '星期二', '星期三', '星期四', '星期五']} for name in self.teachers}
         
         def is_free(t_name, d, s):
-            # ... (此函數邏輯不變) ...
             if s == "UNKNOWN": return True
             busy = teacher_busy_slots.get(t_name, {}).get(d, set())
             if s in busy: return False
@@ -202,14 +201,12 @@ class DutyScheduler:
             return True
 
         def mark_busy(t_name, d, s):
-            # ... (此函數邏輯不變) ...
             if s == "UNKNOWN": return
             if t_name in teacher_busy_slots:
                 teacher_busy_slots[t_name][d].add(s)
         
-        # 優先級：早會 > 入班 > 其他 > 午膳
+        # 優先級：早會 > 入班當值 > 其他小息放學 > 午膳
         def get_priority(item):
-            # ... (此函數邏輯不變) ...
             name, details = item
             if "早會" in name: return 1
             if "入班當值" in name: return 2
@@ -217,11 +214,9 @@ class DutyScheduler:
             return 3
         
         def get_proximity_score(teacher, day, lesson, duty_floor):
-            # 獲取老師在該節課的樓層
             teacher_floor = self.locations.get((teacher, day, lesson))
             if teacher_floor is None or duty_floor is None:
-                return 100 # 如果沒有樓層資訊，給予高懲罰分
-            # 同層優先，樓層差越小越好
+                return 100 # 無樓層資訊給予高分(低優先級)
             return abs(teacher_floor - duty_floor)
 
         sorted_duties = sorted(duties.items(), key=get_priority)
@@ -230,24 +225,22 @@ class DutyScheduler:
             slot = self._get_duty_slot(duty)
             assigned = []
             
-            # 【核心修正】對小息崗位啟用「就近樓層」排序
+            # 對小息崗位啟用「就近樓層」智慧分流排序
             if "小息" in duty:
                 lesson_to_check = 3 if "小息一" in duty else 5
                 try:
-                    duty_floor = int(duty.split('_')[1].replace('樓',''))
+                    # 抓取如 "小息一_6樓_9:45-10:00" 中的 6
+                    duty_floor = int(duty.[...](asc_slot://start-slot-1)split('_').replace('樓','').replace('地下','0'))
                 except (ValueError, IndexError):
-                    duty_floor = None # 若崗位名稱不含樓層，則不使用就近邏輯
+                    duty_floor = None
 
                 candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
                 
-                # 排序：優先同樓層，其次工作量
+                # 排序權重：1. 樓層就近分數 2. 當值累積工作量
                 candidates.sort(key=lambda t: (get_proximity_score(t, day, lesson_to_check, duty_floor), ref_scores.get(t, 0)))
-                
                 assigned = candidates[:details['headcount']]
             
-            # 其他崗位的原有邏輯
             elif details.get('class_specific'):
-                # ... (此處邏輯不變) ...
                 cls = details['class_specific']
                 class_teachers = [name for name, info in self.teachers.items() if info.get('class_name') == cls]
                 available_ct = [t for t in class_teachers if not self.is_teacher_unavailable(t, day, duty, week_type) and is_free(t, day, slot)]
@@ -259,11 +252,11 @@ class DutyScheduler:
                     backup.sort(key=lambda n: ref_scores.get(n, 0))
                     if backup: assigned = [backup[0]]
             else:
-                # ... (此處邏輯不變) ...
                 if details.get('fixed_teacher'):
                     assigned.extend(details['fixed_teacher'])
                     for t in details['fixed_teacher']:
                         mark_busy(t, day, slot)
+                
                 remaining_spots = details['headcount'] - len(assigned)
                 if remaining_spots > 0:
                     candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and name not in assigned and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
@@ -283,11 +276,11 @@ class DutyScheduler:
         return schedule, reg_scores, lunch_scores, ref_scores
 
 # ==========================================
-# 網頁介面設計 (Streamlit) - 此部分程式碼完全不變
+# 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.1 智慧就近版)")
-st.markdown("系統已加入**小息就近樓層優先**、**早會優先排程**及**個人總覽**等全方位功能。")
+st.title("🏫 訓導處當值表自動編排系統 (v5.2 智慧就近完美版)")
+st.markdown("系統已加入**小息就近樓層優先**、**早會優先排程**及**個人當值總覽**等全方位功能。")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
@@ -332,6 +325,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     for t in assigned:
                         if t in teacher_duties:
                             teacher_duties[t]['雙週'].append(duty.replace('_雙週', ''))
+                            
                 teacher_view_list = []
                 for name, info in scheduler.teachers.items():
                     teacher_view_list.append({
@@ -359,6 +353,6 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確，特別是 `class_locations.csv` 是否包含 `老師姓名`, `星期`, `節數`, `樓層` 欄位。")
+                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確。")
     else:
         st.warning("⚠️ 請先在上方上傳所有 6 個必要的 CSV 檔案！")
