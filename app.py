@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (v5.15 方案B 橫向擴展版)
+# 核心排表邏輯 (v5.16 方案B 橫向擴展版)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -527,13 +527,13 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     "📅 原始列表(雙)", "📊 工作量統計", "👤 個人總覽"
                 ])
                 
-                # Tab 1-5: 套用方案 B (橫向擴展) 的矩陣顯示
+                # [...](asc_slot://start-slot-6)Tab 1-5: 套用方案 B (橫向擴展) 的矩陣顯示 (已完整加入所有 tab 索引[...](asc_slot://start-slot-7),[...](asc_slot://start-slot-8),, [4])
                 with tabs[0]: 
-                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).[...](asc_slot://start-slot-1)set_index("崗位"), use_container_width=True)
+                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).[...](asc_slot://start-slot-10)set_index("崗位"), use_container_width=True)
                 with tabs: 
-                    st.dataframe(build_matrix_table_option_b(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).[...](asc_slot://start-slot-3)set_index("崗位"), use_container_width=True)
+                    st.dataframe(build_matrix_table_option_b(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).[...](asc_slot://start-slot-12)set_index("崗位"), use_container_width=True)
                 with tabs: 
-                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, dismissal_bases, '', scheduler.teachers).[...](asc_slot://start-slot-5)set_index("崗位"), use_container_width=True)
+                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, dismissal_bases, '', scheduler.teachers).[...](asc_slot://start-slot-14)set_index("崗位"), use_container_width=True)
                 with tabs: 
                     st.dataframe(build_dismissal_team_matrix(odd_schedule, scheduler.teachers), use_container_width=True)
                 with tabs[4]: 
@@ -557,7 +557,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                         "午膳(單週分鐘)": odd_lunch.get(name, 0), "午膳(雙週分鐘)": even_lunch.get(name, 0),
                         "總分鐘數(平均)": (odd_ref.get(name, 0) + even_ref.get(name, 0)) / 2
                     } for name, info in scheduler.teachers.items()]
-                    st.dataframe(pd.DataFrame(scores_list).sort_values(by="總分鐘數(平均)", ascending=False), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(scores_list).sort_values(by="總這次工作量統計(平均)", ascending=False), use_container_width=True, hide_index=True)
 
                 # Tab 9: 個人當值崗位總覽
                 with tabs[8]:
