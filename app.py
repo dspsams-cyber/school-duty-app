@@ -3,31 +3,26 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (完全體 v5.3：樓層智慧翻譯與就近分配)
+# 核心排表邏輯 (完全體 v5.4：修復連動指派造成的 headcount 缺失)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
         self.teachers = self._process_teachers(teachers_df)
         self.timetable = self._process_timetable(timetable_df)
-        self.locations = self._process_locations(locations_df) # 已升級
+        self.locations = self._process_locations(locations_df)
         self.coplanning = self._process_coplanning(coplanning_df)
         self.subjects = self._process_subjects(subjects_df)
         self.fixed_duties_map, self.fixed_teachers = self._process_fixed_duties(fixed_duties_df)
         self.duties = self._define_duties()
         
     def _process_teachers(self, df):
+        # ... (此函數無變動) ...
         teachers_dict = {}
         if not df.empty:
             for _, row in df.iterrows():
                 short_n = str(row.get('簡稱', '')).strip()
                 if short_n.lower() in ['nan', 'none']: short_n = ''
-                teachers_dict[row['姓名']] = {
-                    'role': str(row.get('職級', '')).strip(),
-                    'is_pe': str(row.get('是否體育老師', '否')).strip() == '是',
-                    'special_role': str(row.get('特殊身份', '無')).strip(),
-                    'class_name': str(row.get('所屬班別', '無')).strip(),
-                    'short_name': short_n
-                }
+                teachers_dict[row['姓名']] = {'role': str(row.get('職級', '')).strip(),'is_pe': str(row.get('是否體育老師', '否')).strip() == '是','special_role': str(row.get('特殊身份', '無')).strip(),'class_name': str(row.get('所屬班別', '無')).strip(),'short_name': short_n}
         return teachers_dict
 
     def _process_timetable(self, df):
@@ -42,21 +37,16 @@ class DutyScheduler:
                     tt[name][day] = []
         return tt
         
-    # 【核心升級】打造樓層智慧翻譯機，完美處理 G/地下/數字/樓
     def _process_locations(self, df):
+        # ... (此函數無變動) ...
         if not df.empty and '老師姓名' in df.columns and '星期' in df.columns and '節數' in df.columns and '樓層' in df.columns:
             def convert_floor(floor_input):
-                if pd.isna(floor_input):
-                    return None
+                if pd.isna(floor_input): return None
                 s = str(floor_input).strip().upper()
-                if s == 'G' or '地下' in s:
-                    return 0
-                # 從 "1樓" 或 "1" 中提取數字
+                if s == 'G' or '地下' in s: return 0
                 nums = re.findall(r'\d+', s)
-                if nums:
-                    return int(nums[0])
+                if nums: return int(nums[0])
                 return None
-
             df['樓層_val'] = df['樓層'].apply(convert_floor)
             return df.set_index(['老師姓名', '星期', '節數'])['樓層_val'].to_dict()
         return {}
@@ -65,13 +55,10 @@ class DutyScheduler:
         # ... (此函數無變動) ...
         cp = {'單週': {}, '雙週': {}}
         for day in ['星期一', '星期二', '星期三', '星期四', '星期五']:
-            cp['單週'][day] = []
-            cp['雙週'][day] = []
+            cp['單週'][day], cp['雙週'][day] = [], []
         if not df.empty and '老師姓名' in df.columns:
             for _, row in df.iterrows():
-                name = str(row.get('老師姓名','')).strip()
-                day = str(row.get('星期','')).strip()
-                week = str(row.get('週次','')).strip()
+                name, day, week = str(row.get('老師姓名','')).strip(), str(row.get('星期','')).strip(), str(row.get('週次','')).strip()
                 if name and day in cp['單週']:
                     if week == '單週': cp['單週'][day].append(name)
                     if week == '雙週': cp['雙週'][day].append(name)
@@ -97,10 +84,12 @@ class DutyScheduler:
         return fd_map, f_teachers
 
     def _define_duties(self):
-        # ... (此函數無變動) ...
+        # 【核心修正】改變連動邏輯，確保 headcount 永不丟失
         duties = {}
         days = ['星期一', '星期二', '星期三', '星期四', '星期五']
-        morning_slots = {
+        
+        # 1. 先定義所有崗位的基本屬性
+        all_slots = {
             "早會_雨天操場_7:30-7:55": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
             "早會_雨天操場_7:55-8:20": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
             "早會_詢問處_7:30-7:55": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
@@ -108,54 +97,72 @@ class DutyScheduler:
             "早會_正門大閘_7:30-7:55": {"count": 2, "weight": 25, "roles": ['副校', '主任']},
             "早會_正門大閘_7:55-8:20": {"count": 3, "weight": 25, "roles": ['副校', '主任']},
             "早會_雨天操場持咪_7:55-8:20": {"count": 1, "weight": 25, "roles": ['副校', '主任', '非班主任']},
-            "早會_宣佈_8:15-8:35": {"count": 1, "weight": 20, "roles": ['副校', '主任', '非班主任']}
+            "早會_宣佈_8:15-8:35": {"count": 1, "weight": 20, "roles": ['副校', '主任', '非班主任']},
+            "小息一_6樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_5樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_4樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_2樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_地下_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_3樓_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息一_1樓前後梯_9:45-10:00": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_6樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_5樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_4樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_2樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_地下_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_3樓_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "小息二_1樓前後梯_11:10-11:25": {"count": 1, "weight": 15, "roles": ['副校', '主任', '班主任', '非班主任']},
+            "午膳二_6樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_5樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_4樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_3樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_2樓_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "午膳二_地下_13:05-13:35": {"count": 1, "weight": 30, "roles": ['副校', '主任', '非班主任']},
+            "放學_雨天操場持咪_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
+            "放學_家長隊(雨天操場)1_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
+            "放學_家長隊(雨天操場)2_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
+            "放學_大閘(外)_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
+            "放學_新翼持咪_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
+            "放學_正門大閘_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
         }
+
         for day in days:
-            for duty, details in morning_slots.items():
-                duties[f'{day}_{duty}_單週'] = {**details}
-                duties[f'{day}_{duty}_雙週'] = {**details}
-                if '雨天操場持咪' in duty and '雨天操場持咪' in self.fixed_duties_map:
-                    teacher = self.fixed_duties_map['雨天操場持咪']
-                    duties[f'{day}_{duty}_單週']['fixed_teacher'] = [teacher]
-                    duties[f'{day}_{duty}_雙週']['fixed_teacher'] = [teacher]
-                if '早會_正門大閘_7:30-7:55' == duty and '雨天操場持咪' in self.fixed_duties_map:
-                    teacher = self.fixed_duties_map['雨天操場持咪']
-                    duties[f'{day}_{duty}_單週']['fixed_teacher'] = [teacher]
-                    duties[f'{day}_{duty}_雙週']['fixed_teacher'] = [teacher]
-                if '宣佈' in duty and '宣佈' in self.fixed_duties_map:
-                    teacher = self.fixed_duties_map['宣佈']
-                    duties[f'{day}_{duty}_單週']['fixed_teacher'] = [teacher]
-                    duties[f'{day}_{duty}_雙週']['fixed_teacher'] = [teacher]
+            for duty, details in all_slots.items():
+                if "早會" in duty:
+                    duties[f'{day}_{duty}_單週'] = {'headcount': details['count'], 'weight': details['weight'], 'roles': details['roles']}
+                    duties[f'{day}_{duty}_雙週'] = {'headcount': details['count'], 'weight': details['weight'], 'roles': details['roles']}
+                else:
+                    duties[f'{day}_{duty}'] = {'headcount': details['count'], 'weight': details['weight'], 'roles': details['roles'], 'is_lunch': '午膳' in duty}
+        
+        # 2. 再安全地追加「連動」的專責老師
+        for day in days:
+            if '雨天操場持咪' in self.fixed_duties_map:
+                teacher = self.fixed_duties_map['雨天操場持咪']
+                duties[f'{day}_早會_雨天操場持咪_7:55-8:20_單週']['fixed_teacher'] = [teacher]
+                duties[f'{day}_早會_雨天操場持咪_7:55-8:20_雙週']['fixed_teacher'] = [teacher]
+                duties[f'{day}_早會_正門大閘_7:30-7:55_單週']['fixed_teacher'] = [teacher]
+                duties[f'{day}_早會_正門大閘_7:30-7:55_雙週']['fixed_teacher'] = [teacher]
+            if '宣佈' in self.fixed_duties_map:
+                teacher = self.fixed_duties_map['宣佈']
+                duties[f'{day}_早會_宣佈_8:15-8:35_單週']['fixed_teacher'] = [teacher]
+                duties[f'{day}_早會_宣佈_8:15-8:35_雙週']['fixed_teacher'] = [teacher]
+
+        # 3. 處理剩餘的崗位
         all_classes = [cls for cls in self.subjects.keys() if str(cls) and str(cls)[0] in '123456']
         for day in days:
             for cls in all_classes:
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_單週'] = {'weight': 20, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
                 duties[f'{day}_入班當值_{cls}_07:55-08:15_雙週'] = {'weight': 20, 'roles': ['班主任', '非班主任'], 'headcount': 1, 'class_specific': cls}
-        other_slots = {
-            "小息一_6樓_9:45-10:00": (1, 15), "小息一_5樓_9:45-10:00": (1, 15), "小息一_4樓_9:45-10:00": (1, 15),
-            "小息一_2樓_9:45-10:00": (1, 15), "小息一_地下_9:45-10:00": (1, 15), "小息一_3樓_9:45-10:00": (1, 15),
-            "小息一_1樓前後梯_9:45-10:00": (1, 15),
-            "小息二_6樓_11:10-11:25": (1, 15), "小息二_5樓_11:10-11:25": (1, 15), "小息二_4樓_11:10-11:25": (1, 15),
-            "小息二_2樓_11:10-11:25": (1, 15), "小息二_地下_11:10-11:25": (1, 15), "小息二_3樓_11:10-11:25": (1, 15),
-            "小息二_1樓前後梯_11:10-11:25": (1, 15),
-            "午膳二_6樓_13:05-13:35": (1, 30), "午膳二_5樓_13:05-13:35": (1, 30), "午膳二_4樓_13:05-13:35": (1, 30),
-            "午膳二_3樓_13:05-13:35": (1, 30), "午膳二_2樓_13:05-13:35": (1, 30), "午膳二_地下_13:05-13:35": (1, 30),
-            "放學_雨天操場持咪_15:25-15:45": (1, 20), "放學_家長隊(雨天操場)1_15:25-15:45": (1, 20),
-            "放學_家長隊(雨天操場)2_15:25-15:45": (1, 20), "放學_大閘(外)_15:25-15:45": (1, 20),
-            "放學_新翼持咪_15:25-15:45": (1, 20), "放學_正門大閘_15:25-15:45": (1, 20)
-        }
-        for day in days:
-            for duty, (count, weight) in other_slots.items():
-                roles = ['副校', '主任', '班主任', '非班主任'] if '小息' in duty else (['副校', '主任'] if '放學_' in duty else ['副校', '主任', '非班主任'])
-                duties[f'{day}_{duty}'] = {'weight': weight, 'roles': roles, 'headcount': count, 'is_lunch': '午膳' in duty}
+        
         team_lead_routes = ["A", "B", "C", "D", "E", "F"]
         for day in days:
             for route in team_lead_routes:
                 duties[f'{day}_放學隊_{route}_15:25-15:45'] = {'weight': 20, 'roles': ['班主任', '非班主任'], 'headcount': 1}
+        
         return duties
 
+    # ... (is_teacher_unavailable, _get_duty_slot, run_scheduler, 網頁介面 等所有後續部分都無變動) ...
     def _get_duty_slot(self, duty_name):
-        # ... (此函數無變動) ...
         if "7:30" in duty_name: return "M1"
         if "7:55" in duty_name or "07:55" in duty_name: return "M2"
         if "8:15" in duty_name or "宣佈" in duty_name: return "M3"
@@ -166,7 +173,6 @@ class DutyScheduler:
         return "UNKNOWN"
 
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
-        # ... (此函數無變動) ...
         info = self.teachers.get(teacher_name, {})
         if teacher_name in self.fixed_teachers: return True
         if "早會" in duty_name or "入班當值" in duty_name:
@@ -185,7 +191,6 @@ class DutyScheduler:
         return False
 
     def run_scheduler(self, week_type):
-        # ... (除了 get_proximity_score 內的 duty_floor 提取邏輯，其餘大部分無變動) ...
         duties = {k: v for k, v in self.duties.items() if week_type in k or ('單週' not in k and '雙週' not in k)}
         schedule = {duty: [] for duty in duties}
         reg_scores, lunch_scores, ref_scores = ({name: 0 for name in self.teachers} for _ in range(3))
@@ -214,28 +219,22 @@ class DutyScheduler:
         
         def get_proximity_score(teacher, day, lesson, duty_floor):
             teacher_floor = self.locations.get((teacher, day, lesson))
-            if teacher_floor is None or duty_floor is None:
-                return 100
+            if teacher_floor is None or duty_floor is None: return 100
             return abs(teacher_floor - duty_floor)
 
         sorted_duties = sorted(duties.items(), key=get_priority)
         for duty, details in sorted_duties:
-            day = duty.split('_')[0]
-            slot = self._get_duty_slot(duty)
+            day, slot = duty.split('_')[0], self._get_duty_slot(duty)
             assigned = []
             
             if "小息" in duty:
                 lesson_to_check = 3 if "小息一" in duty else 5
-                
-                # 提取樓層數字，適配 "6樓" 或 "地下"
                 duty_floor_str = duty.split('_')[1]
                 if '地下' in duty_floor_str: duty_floor = 0
                 else: duty_floor = int(re.findall(r'\d+', duty_floor_str)[0]) if re.findall(r'\d+', duty_floor_str) else None
-
                 candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
                 candidates.sort(key=lambda t: (get_proximity_score(t, day, lesson_to_check, duty_floor), ref_scores.get(t, 0)))
                 assigned = candidates[:details['headcount']]
-            
             elif details.get('class_specific'):
                 cls = details['class_specific']
                 class_teachers = [name for name, info in self.teachers.items() if info.get('class_name') == cls]
@@ -262,22 +261,16 @@ class DutyScheduler:
                 mark_busy(teacher, day, slot)
                 if teacher in ref_scores:
                     ref_scores[teacher] += details['weight']
-                    if details.get('is_lunch', False):
-                        lunch_scores[teacher] += details['weight']
-                    else:
-                        reg_scores[teacher] += details['weight']
+                    if details.get('is_lunch', False): lunch_scores[teacher] += details['weight']
+                    else: reg_scores[teacher] += details['weight']
                 
         return schedule, reg_scores, lunch_scores, ref_scores
 
-# ==========================================
-# 網頁介面設計 (Streamlit)
-# ==========================================
+# ... (網頁介面部分完全無變動) ...
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.3 智慧就近版)")
-st.markdown("系統已加入**樓層智慧翻譯**，實現精準就近分配。")
+st.title("🏫 訓導處當值表自動編排系統 (v5.4 穩定版)")
+st.markdown("系統已修復連動指派 Bug，並加入**小息就近樓層**、**早會優先**及**個人總覽**等全方位功能。")
 st.divider()
-
-# ... (其餘網頁介面部分完全不變) ...
 cols1 = st.columns(3); cols2 = st.columns(3)
 files_map = {"1️⃣ 老師名單": "teachers_list.csv", "2️⃣ 課堂時間表": "timetable.csv", "3️⃣ 課室樓層表": "class_locations.csv", "4️⃣ 共備名單": "co_planning.csv", "5️⃣ 主科任教名單": "subject_teachers.csv", "6️⃣ 專責崗位名單": "fixed_duties.csv"}
 uploaded_files = {}
@@ -333,7 +326,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     st.dataframe(pd.DataFrame(teacher_view_list), use_container_width=True, hide_index=True)
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確，特別是 `class_locations.csv`。")
+                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確。")
     else:
         st.warning("⚠️ 請先在上方上傳所有 6 個必要的 CSV 檔案！")
 
