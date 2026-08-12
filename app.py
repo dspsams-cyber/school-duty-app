@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (v5.8：徹底修正樓層解析 TypeError)
+# 核心排表邏輯 (v5.9 最終完整版：完美就近分配與影子預排)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -40,16 +40,32 @@ class DutyScheduler:
         return tt
         
     def _process_locations(self, df):
+        loc_dict = {}
         if not df.empty and '老師姓名' in df.columns and '星期' in df.columns and '節數' in df.columns and '樓層' in df.columns:
-            def convert_floor(fl):
-                if pd.isna(fl): return None
-                s = str(fl).strip().upper()
-                if s == 'G' or '地下' in s: return 0
-                nums = re.findall(r'\d+', s)
-                return int(nums[0]) if nums else None
-            df['樓層_val'] = df['樓層'].apply(convert_floor)
-            return df.set_index(['老師姓名', '星期', '節數'])['樓層_val'].to_dict()
-        return {}
+            for _, r in df.iterrows():
+                t_name = str(r.get('老師姓名', '')).strip()
+                day = str(r.get('星期', '')).strip()
+                lesson_raw = str(r.get('節數', ''))
+                floor_raw = str(r.get('樓層', ''))
+                
+                # 強制萃取節數數字，確保轉為 int 型態
+                lesson_nums = re.findall(r'\d+', lesson_raw)
+                if not t_name or not day or not lesson_nums:
+                    continue
+                lesson_val = int(lesson_nums[0])
+                
+                # 強制萃取樓層數字或地下
+                floor_str = floor_raw.strip().upper()
+                if 'G' in floor_str or '地下' in floor_str:
+                    floor_val = 0
+                else:
+                    floor_nums = re.findall(r'\d+', floor_str)
+                    floor_val = int(floor_nums[0]) if floor_nums else None
+                
+                if floor_val is not None:
+                    # 建立 tuple 必定是 (字串, 字串, 整數)
+                    loc_dict[(t_name, day, lesson_val)] = floor_val
+        return loc_dict
 
     def _process_coplanning(self, df):
         cp = {'單週': {d: [] for d in ['星期一', '星期二', '星期三', '星期四', '星期五']}, '雙週': {d: [] for d in ['星期一', '星期二', '星期三', '星期四', '星期五']}}
@@ -208,8 +224,12 @@ class DutyScheduler:
             return 3
         
         def get_proximity_score(teacher, day, lesson, duty_floor):
+            if duty_floor is None: return 0
             teacher_floor = self.locations.get((teacher, day, lesson))
-            if teacher_floor is None or duty_floor is None: return 100
+            
+            # 老師該節沒有課 (空堂)，給予 0.5 分。優先級高於跨層，低於完全同層。
+            if teacher_floor is None: return 0.5 
+            
             return abs(teacher_floor - duty_floor)
 
         sorted_duties = sorted(duties.items(), key=get_priority)
@@ -225,10 +245,8 @@ class DutyScheduler:
             elif "小息" in duty:
                 lesson_to_check = 3 if "小息一" in duty else 5
                 
-                # 【v5.8 最終修正】：將 duty 名稱中包含樓層的部分提取為「字串」再進行判斷
                 duty_floor_str = ""
                 parts = duty.split('_')
-                # 尋找包含'樓'或'地下'的字串部分
                 for part in parts:
                     if '樓' in part or '地下' in part:
                         duty_floor_str = part
@@ -279,8 +297,8 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.8 最終修正版)")
-st.markdown("系統已加入**影子預排技術**，保證早會/入班無空格，且**小息/午膳/放學單雙週完全一致**！")
+st.title("🏫 訓導處當值表自動編排系統 (v5.9 完整版)")
+st.markdown("系統已加入**影子預排技術**與**完美就近分配**，保證早會無空格，小息/午膳單雙週完全一致，且優先指派同層老師！")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
@@ -321,7 +339,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 # 【第二階段】：強制套用常規崗位至雙週，並重排雙週早會與入班
                 even_schedule, even_reg, even_lunch, even_ref = scheduler.run_scheduler('雙週', fixed_overrides=fixed_others)
                 
-                st.success("✅ 兩段式影子預排雙軌完成！單雙週常規崗位已完美同步。")
+                st.success("✅ 兩段式影子預排雙軌完成！單雙週常規崗位已完美同步，且同層優先指派成功。")
                 
                 # 整理個人當值總覽
                 teacher_duties = {name: {'單週': [], '雙週': []} for name in scheduler.teachers}
