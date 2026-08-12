@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體 v3.2：連動指派 + 全面豁免 + 全校入班 + 分鐘計分 + 放學隊計分修正)
+# 核心排表邏輯 (完全體 v3.3：單一共備名單完美豁免 + 分鐘計分 + 6檔案架構)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -146,8 +146,12 @@ class DutyScheduler:
     def is_teacher_unavailable(self, teacher_name, day, duty_name, week_type):
         info = self.teachers.get(teacher_name, {})
         if teacher_name in self.fixed_teachers: return True
-        if "早上" in duty_name or "入班當值" in duty_name or "早會" in duty_name:
-            if day in self.coplanning.get(week_type, {}) and teacher_name in self.coplanning[week_type].get(day, []): return True
+        
+        # 【關鍵修正】：精準捕捉所有「早會」及「入班當值」崗位，只要老師在 coplanning_df 當天名單內即豁免
+        if "早會" in duty_name or "入班當值" in duty_name:
+            if day in self.coplanning.get(week_type, {}) and teacher_name in self.coplanning[week_type].get(day, []): 
+                return True
+                
         if "放學隊" in duty_name and info.get('class_name','').startswith('1'): return True
         if info.get('special_role') == '輔導主任' and ('小息' in duty_name or '午膳' in duty_name): return True
         if info.get('special_role') == '圖書館老師' and '放學隊' not in duty_name: return True
