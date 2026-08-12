@@ -504,28 +504,36 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     "午膳二_6樓_13:05-13:35", "午膳二_5樓_13:05-13:35", "午膳二_4樓_13:05-13:35", "午膳二_3樓_13:05-13:35", "午膳二_2樓_13:05-13:35", "午膳二_地下_13:05-13:35"
                 ]
 
-                # 建立 UI Tabs
+                # 建立 UI Tabs (共 9 個分頁)
                 tabs = st.tabs([
                     "☀️ 單週早會(表)", "☀️ 雙週早會(表)", "🚶 放學當值(表)", 
                     "🚩 放學隊(表)", "🏫 小息午膳(表)", "📅 原始列表(單)", 
                     "📅 原始列表(雙)", "📊 工作量統計", "👤 個人總覽"
                 ])
                 
-                # Tab 1-5: 全新二維矩陣顯示
-                with tabs[0]: st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.[...](asc_slot://start-slot-1)teachers), use_container_width=True, hide_index=True)
-                with tabs: st.dataframe(build_matrix_table(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.[...](asc_slot://start-slot-3)teachers), use_container_width=True, hide_index=True)
-                with tabs: st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, dismissal_bases, '', scheduler.[...](asc_slot://start-slot-5)teachers), use_container_width=True, hide_index=True)
-                with tabs: st.dataframe(build_dismissal_team_matrix(odd_schedule, scheduler.teachers), use_container_width=True, hide_index=True)
-                with tabs[4]: st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, recess_lunch_bases, '', scheduler.teachers), use_container_width=True, hide_index=True)
+                # Tab 1-5: 顯示二維擴展表格 (修正 tabs 語法)
+                with tabs[0]: 
+                    st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.[...](asc_slot://start-slot-1)teachers), use_container_width=True, hide_index=True)
+                with tabs: 
+                    st.dataframe(build_matrix_table(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.[...](asc_slot://start-slot-3)teachers), use_container_width=True, hide_index=True)
+                with tabs: 
+                    st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, dismissal_bases, '', scheduler.[...](asc_slot://start-slot-5)teachers), use_container_width=True, hide_index=True)
+                with tabs: 
+                    st.dataframe(build_dismissal_team_matrix(odd_schedule, scheduler.teachers), use_container_width=True, hide_index=True)
+                with tabs[4]: 
+                    st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, recess_lunch_bases, '', scheduler.teachers), use_container_width=True, hide_index=True)
 
-                # Tab 6-7: 原始列表檢視 (作為備用核對)
+                # Tab 6-7: 原始一維列表檢視 (備用核對)
                 odd_list = [{"崗位": k.replace('_單週',''), "負責老師": ", ".join([format_name_full(t, scheduler.teachers) for t in v])} for k, v in odd_schedule.items()]
                 even_list = [{"崗位": k.replace('_雙週',''), "負責老師": ", ".join([format_name_full(t, scheduler.teachers) for t in v])} for k, v in even_schedule.items()]
-                odd_list.sort(key=get_display_sort_key); even_list.sort(key=get_display_sort_key)
-                with tabs[5]: st.dataframe(pd.DataFrame(odd_list), use_container_width=True, hide_index=True)
-                with tabs[6]: st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
+                odd_list.sort(key=get_display_sort_key)
+                even_list.sort(key=get_display_sort_key)
+                with tabs[5]: 
+                    st.dataframe(pd.DataFrame(odd_list), use_container_width=True, hide_index=True)
+                with tabs[6]: 
+                    st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
 
-                # Tab 8: 統計資訊
+                # Tab 8: 分鐘數統計
                 with tabs[7]:
                     scores_list = [{
                         "老師姓名": format_name_full(name, scheduler.teachers), "職級": info['role'],
@@ -535,7 +543,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     } for name, info in scheduler.teachers.items()]
                     st.dataframe(pd.DataFrame(scores_list).sort_values(by="總分鐘數(平均)", ascending=False), use_container_width=True, hide_index=True)
 
-                # Tab 9: 個人總覽
+                # Tab 9: 個人當值崗位總覽
                 with tabs[8]:
                     teacher_duties = {name: {'單週': [], '雙週': []} for name in scheduler.teachers}
                     for duty, assigned in odd_schedule.items():
