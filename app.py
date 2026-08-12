@@ -40,7 +40,7 @@ class DutyScheduler:
     # 中文漢字節數解碼器
     def decode_chinese_lesson(self, lesson_str):
         lesson_str = str(lesson_str).strip()
-        nums = re.findall(r'\d+', lesson_str)
+        nums = re.findall(r'\\d+', lesson_str)
         if nums: return int(nums[0])
         cn_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
         for char, val in cn_map.items():
@@ -88,7 +88,7 @@ class DutyScheduler:
                 floor_str = floor_raw.strip().upper()
                 if 'G' in floor_str or '地下' in floor_str: floor_val = 0
                 else:
-                    floor_nums = re.findall(r'\d+', floor_str)
+                    floor_nums = re.findall(r'\\d+', floor_str)
                     floor_val = int(floor_nums[0]) if floor_nums else None
                 
                 if floor_val is not None:
@@ -320,7 +320,7 @@ class DutyScheduler:
                         break
                 if '地下' in duty_floor_str: duty_floor = 0
                 else: 
-                    nums = re.findall(r'\d+', duty_floor_str)
+                    nums = re.findall(r'\\d+', duty_floor_str)
                     duty_floor = int(nums[0]) if nums else None
                 
                 candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
@@ -397,6 +397,7 @@ for i, (header, fname) in enumerate(files_map.items()):
     col = cols1[i] if i < 3 else cols2[i-3]
     with col:
         uploaded_files[fname] = st.file_uploader(header, type=['csv'])
+
 st.divider()
 
 # ==========================================
@@ -504,6 +505,7 @@ def build_in_class_duty_matrix(schedule, week_suffix, teachers_dict, subjects_di
         rows.append(row_data)
     return pd.DataFrame(rows).set_index("班別")
 
+
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
     if all(uploaded_files.values()):
         with st.spinner('系統正套用四大疲勞保護機制進行智能分配...'):
@@ -548,15 +550,15 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 
                 # Tab 0: 單週早會
                 with tabs[0]: 
-                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).[...](asc_slot://start-slot-1)set_index("崗位"), use_container_width=True)
+                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).set_index("崗位"), use_container_width=True)
                 # Tab 1: 雙週早會
-                with tabs: 
-                    st.dataframe(build_matrix_table_option_b(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).[...](asc_slot://start-slot-3)set_index("崗位"), use_container_width=True)
+                with tabs[1]: 
+                    st.dataframe(build_matrix_table_option_b(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).set_index("崗位"), use_container_width=True)
                 # Tab 2: 單週入班當值
-                with tabs: 
-                    st.dataframe(build_in_class_duty_matrix(odd_schedule, '_單週', scheduler.teachers, scheduler.[...](asc_slot://start-slot-5)subjects), use_container_width=True)
+                with tabs[2]: 
+                    st.dataframe(build_in_class_duty_matrix(odd_schedule, '_單週', scheduler.teachers, scheduler.subjects), use_container_width=True)
                 # Tab 3: 雙週入班當值
-                with tabs: 
+                with tabs[3]: 
                     st.dataframe(build_in_class_duty_matrix(even_schedule, '_雙週', scheduler.teachers, scheduler.subjects), use_container_width=True)
                 # Tab 4: 放學當值
                 with tabs[4]: 
