@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體 v4.5：新增早會防連續當值保護機制)
+# 核心排表邏輯 (完全體 v4.7：大閘專屬職級鎖與全方位防護)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -83,30 +83,30 @@ class DutyScheduler:
         duties = {}
         days = ['星期一', '星期二', '星期三', '星期四', '星期五']
         
-        # 1. 早會前當值
+        # 1. 早會前當值 (精細設定職級鎖)
         morning_slots = {
-            "早會_雨天操場_7:30-7:55": (2, 25),
-            "早會_雨天操場_7:55-8:20": (2, 25),
-            "早會_詢問處_7:30-7:55": (2, 25),
-            "早會_詢問處_7:55-8:20": (3, 25),
-            "早會_正門大閘_7:30-7:55": (2, 25), # 確定為 2 人配置
-            "早會_正門大閘_7:55-8:20": (3, 25),
-            "早會_雨天操場持咪_7:55-8:20": (1, 25), # 確定為 1 人 (專責老師專屬)
-            "早會_宣佈_8:15-8:35": (1, 20)
+            "早會_雨天操場_7:30-7:55": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
+            "早會_雨天操場_7:55-8:20": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
+            "早會_詢問處_7:30-7:55": {"count": 2, "weight": 25, "roles": ['副校', '主任', '非班主任']},
+            "早會_詢問處_7:55-8:20": {"count": 3, "weight": 25, "roles": ['副校', '主任', '非班主任']},
+            "早會_正門大閘_7:30-7:55": {"count": 2, "weight": 25, "roles": ['副校', '主任']}, # 大閘保安鎖
+            "早會_正門大閘_7:55-8:20": {"count": 3, "weight": 25, "roles": ['副校', '主任']}, # 大閘保安鎖
+            "早會_雨天操場持咪_7:55-8:20": {"count": 1, "weight": 25, "roles": ['副校', '主任', '非班主任']},
+            "早會_宣佈_8:15-8:35": {"count": 1, "weight": 20, "roles": ['副校', '主任', '非班主任']}
         }
         
         for day in days:
-            for duty, (count, weight) in morning_slots.items():
-                duties[f'{day}_{duty}_單週'] = {'weight': weight, 'roles': ['副校', '主任'], 'headcount': count}
-                duties[f'{day}_{duty}_雙週'] = {'weight': weight, 'roles': ['副校', '主任'], 'headcount': count}
+            for duty, details in morning_slots.items():
+                duties[f'{day}_{duty}_單週'] = {'weight': details['weight'], 'roles': details['roles'], 'headcount': details['count']}
+                duties[f'{day}_{duty}_雙週'] = {'weight': details['weight'], 'roles': details['roles'], 'headcount': details['count']}
                 
                 # 連動指派邏輯
                 if '雨天操場持咪' in duty and '雨天操場持咪' in self.fixed_duties_map:
                     teacher = self.fixed_duties_map['雨天操場持咪']
                     duties[f'{day}_{duty}_單週']['fixed_teacher'] = [teacher]
                     duties[f'{day}_{duty}_雙週']['fixed_teacher'] = [teacher]
-                if '早會_正門大閘_7:30-7:55' in duty and '早會_正門大閘_7:30-7:55' in self.fixed_duties_map:
-                    teacher = self.fixed_duties_map['早會_正門大閘_7:30-7:55']
+                if '早會_正門大閘_7:30-7:55' == duty and '雨天操場持咪' in self.fixed_duties_map:
+                    teacher = self.fixed_duties_map['雨天操場持咪']
                     duties[f'{day}_{duty}_單週']['fixed_teacher'] = [teacher]
                     duties[f'{day}_{duty}_雙週']['fixed_teacher'] = [teacher]
                 if '宣佈' in duty and '宣佈' in self.fixed_duties_map:
@@ -214,7 +214,7 @@ class DutyScheduler:
                 if s == "M2" and "M3" in busy: return False
                 if s == "M3" and "M2" in busy: return False
                 
-                # 【新增】防禦 M1(7:30) 與 M2(7:55/入班) 連續當值，避免站 50 分鐘
+                # 防禦 M1(7:30) 與 M2(7:55/入班) 連續當值，避免站 50 分鐘
                 if s == "M1" and "M2" in busy: return False
                 if s == "M2" and "M1" in busy: return False
                 
@@ -260,6 +260,8 @@ class DutyScheduler:
                 remaining_spots = details['headcount'] - len(assigned)
                 if remaining_spots > 0:
                     candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and name not in assigned and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
+                    if '放學' in duty and '全週' not in duty: 
+                        candidates = [c for c in candidates if c not in weekly_afternoon_teachers]
                     candidates.sort(key=lambda n: ref_scores.get(n, 0))
                     assigned.extend(candidates[:remaining_spots])
             
@@ -274,6 +276,8 @@ class DutyScheduler:
                         lunch_scores[teacher] += details['weight']
                     else:
                         reg_scores[teacher] += details['weight']
+            
+            if '全週_放學隊' in duty: weekly_afternoon_teachers.update(assigned)
                 
         return schedule, reg_scores, lunch_scores, ref_scores
 
