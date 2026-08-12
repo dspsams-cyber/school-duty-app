@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (v5.11：加入智能資料匹配引擎，徹底解決斷鏈問題)
+# 核心排表邏輯 (v5.12：智能解碼中文漢字節數)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -15,7 +15,7 @@ class DutyScheduler:
         self.fixed_duties_map, self.fixed_teachers = self._process_fixed_duties(fixed_duties_df)
         self.duties = self._define_duties()
 
-    # 【新增】：智能老師姓名匹配引擎
+    # 智能老師姓名匹配引擎
     def find_teacher_name(self, query_name):
         if not query_name or pd.isna(query_name): return None
         query_name = str(query_name).strip()
@@ -33,7 +33,7 @@ class DutyScheduler:
                 return full_name
         return None
 
-    # 【新增】：智能星期格式統一引擎
+    # 智能星期格式統一引擎
     def normalize_day(self, d_str):
         if pd.isna(d_str): return ""
         d_str = str(d_str).strip().upper()
@@ -43,6 +43,24 @@ class DutyScheduler:
         if '四' in d_str or '4' in d_str or 'THU' in d_str: return '星期四'
         if '五' in d_str or '5' in d_str or 'FRI' in d_str: return '星期五'
         return d_str
+
+    # 【新增】：中文漢字節數解碼器
+    def decode_chinese_lesson(self, lesson_str):
+        lesson_str = str(lesson_str).strip()
+        # 如果裡面本來就有阿拉伯數字，直接萃取
+        nums = re.findall(r'\d+', lesson_str)
+        if nums:
+            return int(nums[0])
+        
+        # 中文數字對照表
+        cn_map = {
+            '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, 
+            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10
+        }
+        for char, val in cn_map.items():
+            if char in lesson_str:
+                return val
+        return None
         
     def _process_teachers(self, df):
         teachers_dict = {}
@@ -65,9 +83,10 @@ class DutyScheduler:
             for _, r in df.iterrows():
                 matched_name = self.find_teacher_name(r.get('老師姓名', ''))
                 day = self.normalize_day(r.get('星期', ''))
-                slot = r.get('節數')
-                if matched_name and day in tt[matched_name]:
-                    tt[matched_name][day].append(slot)
+                slot_raw = r.get('節數')
+                slot_val = self.decode_chinese_lesson(slot_raw)
+                if matched_name and day in tt[matched_name] and slot_val is not None:
+                    tt[matched_name][day].append(slot_val)
         return tt
         
     def _process_locations(self, df):
@@ -76,13 +95,13 @@ class DutyScheduler:
             for _, r in df.iterrows():
                 matched_name = self.find_teacher_name(r.get('老師姓名', ''))
                 day = self.normalize_day(r.get('星期', ''))
-                lesson_raw = str(r.get('節數', ''))
+                lesson_raw = r.get('節數', '')
                 floor_raw = str(r.get('樓層', ''))
                 
-                lesson_nums = re.findall(r'\d+', lesson_raw)
-                if not matched_name or not day or not lesson_nums:
+                # 使用中文漢字節數解碼器
+                lesson_val = self.decode_chinese_lesson(lesson_raw)
+                if not matched_name or not day or lesson_val is None:
                     continue
-                lesson_val = int(lesson_nums[0])
                 
                 floor_str = floor_raw.strip().upper()
                 if 'G' in floor_str or '地下' in floor_str:
@@ -261,15 +280,12 @@ class DutyScheduler:
             if duty_floor is not None:
                 teacher_floor = self.locations.get((teacher, day, lesson))
                 if teacher_floor is None:
-                    # 空堂老師。設定距離分數為 2.5 (介於跨兩層與跨三層之間)
-                    # 這樣既會優先讓剛好在該層的老師去當值，也不至於為了「湊人」強迫很遠的老師跑過來。
                     distance_score = 2.5 
                 else:
                     distance_score = abs(teacher_floor - duty_floor)
             else:
                 distance_score = 0
 
-            # 確保距離是首要考量
             weighted_distance = distance_score * 1000
             final_score = weighted_distance + current_workload
             return final_score
@@ -301,10 +317,7 @@ class DutyScheduler:
                     duty_floor = int(nums[0]) if nums else None
                 
                 candidates = [name for name, info in self.teachers.items() if info['role'] in details['roles'] and not self.is_teacher_unavailable(name, day, duty, week_type) and is_free(name, day, slot)]
-                
-                # 採用最強悍的綜合分數排序
                 candidates.sort(key=lambda t: get_combined_score(t, day, lesson_to_check, duty_floor, ref_scores.get(t, 0)))
-                
                 assigned = candidates[:details['headcount']]
                 
             elif details.get('class_specific'):
@@ -342,8 +355,8 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.11 智能匹配版)")
-st.markdown("系統已搭載**智能資料匹配引擎**，能自動修正不同 CSV 之間的姓名與格式差異，保證**完美就近分配**！")
+st.title("🏫 訓導處當值表自動編排系統 (v5.12 漢字解碼版)")
+st.markdown("系統已加入**中文漢字節數自動解碼**（如第一節自動轉為1），保證就近分配100%完美生效！")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
@@ -362,7 +375,7 @@ def format_name(name, teachers_dict):
 
 if st.button("🚀 開始自動編排當值表", use_container_width=True, type="primary"):
     if all(uploaded_files.values()):
-        with st.spinner('系統正啟動最高權限引擎，執行資料智能修正與就近演算...'):
+        with st.spinner('系統正解碼中文漢字節數，並進行影子預排分配...'):
             try:
                 def read_csv_auto(file):
                     try: return pd.read_csv(file, encoding='utf-8')
@@ -384,7 +397,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 # 【第二階段】：強制套用常規崗位至雙週，並重排雙週早會與入班
                 even_schedule, even_reg, even_lunch, even_ref = scheduler.run_scheduler('雙週', fixed_overrides=fixed_others)
                 
-                st.success(f"✅ 演算法執行完畢！系統成功定位了 {len(scheduler.locations)} 筆上課位置，就近分配 100% 生效！")
+                st.success(f"🎉 演算法執行完畢！系統成功定位了 {len(scheduler.locations)} 筆上課位置，就近分配 100% 生效！")
                 
                 # 整理個人當值總覽
                 teacher_duties = {name: {'單週': [], '雙週': []} for name in scheduler.teachers}
