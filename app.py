@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (完全體 v5.7：修正影子預排標記與樓層解析)
+# 核心排表邏輯 (v5.8：徹底修正樓層解析 TypeError)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -200,7 +200,6 @@ class DutyScheduler:
             if s == "UNKNOWN" or t_name not in teacher_busy_slots: return
             teacher_busy_slots[t_name][d].add(s)
         
-        # 保證早會與入班擁有最高優先權
         def get_priority(item):
             name, details = item
             if "早會" in name: return 1
@@ -218,20 +217,23 @@ class DutyScheduler:
             day, slot = duty.split('_')[0], self._get_duty_slot(duty)
             assigned = []
             
-            # 【修復邏輯】：若從單週強行套用（影子預排），必須同時更新該老師的忙碌狀態 (mark_busy)
             if fixed_overrides and duty in fixed_overrides:
                 assigned = fixed_overrides[duty].copy()
                 for t in assigned:
                     mark_busy(t, day, slot)
             
-            # 否則執行正常配對邏輯
             elif "小息" in duty:
                 lesson_to_check = 3 if "小息一" in duty else 5
                 
-                # 【修復 BUG】：完美解析樓層部分，徹底解決原本因語法錯誤導致的 Crash
-                parts = duty.[...](asc_slot://start-slot-1)split('_')
-                duty_floor_str = parts if len(parts) > 2 else ""
-                
+                # 【v5.8 最終修正】：將 duty 名稱中包含樓層的部分提取為「字串」再進行判斷
+                duty_floor_str = ""
+                parts = duty.split('_')
+                # 尋找包含'樓'或'地下'的字串部分
+                for part in parts:
+                    if '樓' in part or '地下' in part:
+                        duty_floor_str = part
+                        break
+
                 if '地下' in duty_floor_str: 
                     duty_floor = 0
                 else: 
@@ -277,7 +279,7 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.7 兩段式影子預排版)")
+st.title("🏫 訓導處當值表自動編排系統 (v5.8 最終修正版)")
 st.markdown("系統已加入**影子預排技術**，保證早會/入班無空格，且**小息/午膳/放學單雙週完全一致**！")
 st.divider()
 
@@ -357,6 +359,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
-                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確。")
+                st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確，特別是當值名稱中是否包含樓層信息。")
+
     else:
         st.warning("⚠️ 請先在上方上傳所有 6 個必要的 CSV 檔案！")
