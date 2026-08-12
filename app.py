@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (v5.14 頂級智能版)
+# 核心排表邏輯 (v5.15 方案B 橫向擴展版)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -382,8 +382,8 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.15 矩陣修正版)")
-st.markdown("搭載**四大疲勞保護機制**與**體育老師保留位**，排表更貼心、更合乎人性！")
+st.title("🏫 訓導處當值表自動編排系統 (v5.16 方案B 橫向擴展版)")
+st.markdown("搭載**四大疲勞保護機制**與**體育老師保留位**，完全採用**方案B (橫向擴展星期)** 設計。")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
@@ -414,7 +414,6 @@ def get_display_sort_key(item_dict):
     duty_name = item_dict.get("崗位", "")
     days = {'星期一': 1, '星期二': 2, '星期三': 3, '星期四': 4, '星期五': 5}
     day_str = duty_name.split('_')[0] if '_' in duty_name else ""
-    # 排序邏輯: 星期 > 時段 (早 > 小息 > 午 > 放) > 崗位名稱
     time_order = 99
     if "早會" in duty_name: time_order = 1
     elif "入班" in duty_name: time_order = 2
@@ -424,41 +423,50 @@ def get_display_sort_key(item_dict):
     elif "放學" in duty_name: time_order = 6
     return (days.get(day_str, 99), time_order, duty_name)
 
-# 產生二維擴展表格 (方案 A: 直向拆分人數)
-def build_matrix_table(schedule, duties_def, base_names, week_suffix, teachers_dict):
+# ★★★ 產生二維擴展表格 (方案 B: 橫向擴展星期欄位) ★★★
+def build_matrix_table_option_b(schedule, duties_def, base_names, week_suffix, teachers_dict):
     days = ['星期一', '星期二', '星期三', '星期四', '星期五']
-    rows = []
+    
+    # 1. 找出這個表格中，所有崗位的「最大需求人數」
+    max_hc = 1
     for base in base_names:
-        max_hc = 1
-        # 計算此崗位在整週中的最大需求人數
         for d in days:
             k1 = f"{d}_{base}{week_suffix}"
             k2 = f"{d}_{base}"
             if k1 in duties_def: max_hc = max(max_hc, duties_def[k1]['headcount'])
             elif k2 in duties_def: max_hc = max(max_hc, duties_def[k2]['headcount'])
+            
+    rows = []
+    for base in base_names:
+        row_data = {"崗位": base}
+        for d in days:
+            k1 = f"{d}_{base}{week_suffix}"
+            k2 = f"{d}_{base}"
+            target_k = k1 if k1 in schedule else (k2 if k2 in schedule else None)
+            
+            if target_k:
+                assigned = [format_short_name(t, teachers_dict) for t in schedule[target_k]]
+                req = duties_def[target_k]['headcount']
+                # 補足缺額
+                cells = assigned + ["欠1人"] * (req - len(assigned))
+                # 若該崗位需求人數小於表格最大需求，剩餘格子補 "-"
+                cells += ["-"] * (max_hc - req)
+            else:
+                cells = ["-"] * max_hc
+            
+            # 依據 max_hc 決定要產出單欄還是多欄 (例如: 星期一(1), 星期一(2))
+            if max_hc == 1:
+                row_data[d] = cells[0]
+            else:
+                for i in range(max_hc):
+                    col_name = f"{d} ({i+1})"
+                    row_data[col_name] = cells[i]
+                    
+        rows.append(row_data)
         
-        # 依照需求人數拆分成多列 (一格對應一人)
-        for i in range(max_hc):
-            row_data = {"崗位": base if max_hc == 1 else f"{base} ({i+1})"}
-            for d in days:
-                k1 = f"{d}_{base}{week_suffix}"
-                k2 = f"{d}_{base}"
-                target_k = k1 if k1 in schedule else (k2 if k2 in schedule else None)
-                
-                if target_k:
-                    assigned = [format_short_name(t, teachers_dict) for t in schedule[target_k]]
-                    req = duties_def[target_k]['headcount']
-                    # 補足缺額
-                    cells = assigned + ["欠1人"] * (req - len(assigned))
-                    # 若該日需求小於最大需求(如補假)，多出的格子補 "-"
-                    cells += ["-"] * (max_hc - req)
-                    row_data[d] = cells[i] if i < len(cells) else "-"
-                else:
-                    row_data[d] = "-"
-            rows.append(row_data)
     return pd.DataFrame(rows)
 
-# 產生放學隊表格 (X軸為ABCDEF)
+# 產生放學隊表格 (方案 B 特化：X軸為ABCDEF，Y軸為星期)
 def build_dismissal_team_matrix(schedule, teachers_dict):
     days = ['星期一', '星期二', '星期三', '星期四', '星期五']
     routes = ["A", "B", "C", "D", "E", "F"]
@@ -494,7 +502,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 fixed_others = {k: v for k, v in odd_schedule.items() if "小息" in k or "午膳" in k or "放學" in k}
                 even_schedule, even_reg, even_lunch, even_ref = scheduler.run_scheduler('雙週', fixed_overrides=fixed_others)
                 
-                st.success("🎉 演算法執行完畢！系統已產生方便複製至 Excel 的二維擴展表格。")
+                st.success("🎉 演算法執行完畢！系統已產生【方案 B：橫向擴展版】二維表格。")
 
                 # 定義表格順序與基礎名稱
                 morning_bases = [
@@ -512,24 +520,24 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     "午膳二_6樓_13:05-13:35", "午膳二_5樓_13:05-13:35", "午膳二_4樓_13:05-13:35", "午膳二_3樓_13:05-13:35", "午膳二_2樓_13:05-13:35", "午膳二_地下_13:05-13:35"
                 ]
 
-                # 建立 UI Tabs (共 9 個分頁)
+                # 建立 UI Tabs
                 tabs = st.tabs([
                     "☀️ 單週早會(表)", "☀️ 雙週早會(表)", "🚶 放學當值(表)", 
                     "🚩 放學隊(表)", "🏫 小息午膳(表)", "📅 原始列表(單)", 
                     "📅 原始列表(雙)", "📊 工作量統計", "👤 個人總覽"
                 ])
                 
-                # Tab 1-5: 顯示二維擴展表格 (已修正所有 tabs 語法)
+                # Tab 1-5: 套用方案 B (橫向擴展) 的矩陣顯示
                 with tabs[0]: 
-                    st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).set_index("崗位"), use_container_width=True)
-                with tabs[1]: 
-                    st.dataframe(build_matrix_table(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).set_index("崗位"), use_container_width=True)
-                with tabs[2]: 
-                    st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, dismissal_bases, '', scheduler.teachers).set_index("崗位"), use_container_width=True)
-                with tabs[3]: 
+                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).[...](asc_slot://start-slot-1)set_index("崗位"), use_container_width=True)
+                with tabs: 
+                    st.dataframe(build_matrix_table_option_b(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).[...](asc_slot://start-slot-3)set_index("崗位"), use_container_width=True)
+                with tabs: 
+                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, dismissal_bases, '', scheduler.teachers).[...](asc_slot://start-slot-5)set_index("崗位"), use_container_width=True)
+                with tabs: 
                     st.dataframe(build_dismissal_team_matrix(odd_schedule, scheduler.teachers), use_container_width=True)
                 with tabs[4]: 
-                    st.dataframe(build_matrix_table(odd_schedule, scheduler.duties, recess_lunch_bases, '', scheduler.teachers).set_index("崗位"), use_container_width=True)
+                    st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, recess_lunch_bases, '', scheduler.teachers).set_index("崗位"), use_container_width=True)
 
                 # Tab 6-7: 原始一維列表檢視 (備用核對)
                 odd_list = [{"崗位": k.replace('_單週',''), "負責老師": ", ".join([format_name_full(t, scheduler.teachers) for t in v])} for k, v in odd_schedule.items()]
