@@ -190,7 +190,6 @@ class DutyScheduler:
                 teacher = self.fixed_duties_map['宣佈']
                 duties[f'{day}_早會_宣佈_8:15-8:35_單週']['fixed_teacher'] = [teacher]
                 duties[f'{day}_早會_宣佈_8:15-8:35_雙週']['fixed_teacher'] = [teacher]
-
         all_classes = [cls for cls in self.subjects.keys() if str(cls) and str(cls)[0] in '123456']
         for day in days:
             for cls in all_classes:
@@ -317,7 +316,6 @@ class DutyScheduler:
             return penalty + workload_score + distance_score
 
         sorted_duties = sorted(duties.items(), key=get_priority)
-
         for duty, details in sorted_duties:
             day, slot = duty.split('_')[0], self._get_duty_slot(duty)
             assigned = []
@@ -520,7 +518,9 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     except UnicodeDecodeError:
                         file.seek(0)
                         try: return pd.read_csv(file, encoding='big5')
-                        except UnicodeDecodeError: file.seek(0); return pd.read_csv(file, encoding='cp950')
+                        except UnicodeDecodeError: 
+                            file.seek(0)
+                            return pd.read_csv(file, encoding='cp950')
                         
                 dfs = {fname: read_csv_auto(file) for fname, file in uploaded_files.items()}
                 scheduler = DutyScheduler(dfs['teachers_list.csv'], dfs['timetable.csv'], dfs['class_locations.csv'], dfs['co_planning.csv'], dfs['subject_teachers.csv'], dfs['fixed_duties.csv'])
@@ -530,6 +530,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 even_schedule, even_reg, even_lunch, even_ref = scheduler.run_scheduler('雙週', fixed_overrides=fixed_others)
                 
                 st.success("🎉 演算法執行完畢！系統已產生【方案 B：橫向擴展版】二維表格。")
+                
                 morning_bases = [
                     "早會_雨天操場_7:30-7:55", "早會_雨天操場_7:55-8:20", "早會_雨天操場持咪_7:55-8:20",
                     "早會_詢問處_7:30-7:55", "早會_詢問處_7:55-8:20", "早會_正門大閘_7:30-7:55",
@@ -551,10 +552,10 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                     "📅 原始列表(單)", "📅 原始列表(雙)", "📊 工作量統計", "👤 個人總覽"
                 ])
                 
-                with tabs[0]: st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).[...](asc_slot://start-slot-1)set_index("崗位"), use_container_width=True)
-                with tabs: st.dataframe(build_matrix_table_option_b(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).[...](asc_slot://start-slot-3)set_index("崗位"), use_container_width=True)
-                with tabs: st.dataframe(build_in_class_duty_matrix(odd_schedule, '_單週', scheduler.teachers, scheduler.[...](asc_slot://start-slot-5)subjects), use_container_width=True)
-                with tabs: st.dataframe(build_in_class_duty_matrix(even_schedule, '_雙週', scheduler.teachers, scheduler.subjects), use_container_width=True)
+                with tabs[0]: st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, morning_bases, '_單週', scheduler.teachers).set_index("崗位"), use_container_width=True)
+                with tabs[1]: st.dataframe(build_matrix_table_option_b(even_schedule, scheduler.duties, morning_bases, '_雙週', scheduler.teachers).set_index("崗位"), use_container_width=True)
+                with tabs[2]: st.dataframe(build_in_class_duty_matrix(odd_schedule, '_單週', scheduler.teachers, scheduler.subjects), use_container_width=True)
+                with tabs[3]: st.dataframe(build_in_class_duty_matrix(even_schedule, '_雙週', scheduler.teachers, scheduler.subjects), use_container_width=True)
                 with tabs[4]: st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, dismissal_bases, '', scheduler.teachers).set_index("崗位"), use_container_width=True)
                 with tabs[5]: st.dataframe(build_dismissal_team_matrix(odd_schedule, scheduler.teachers), use_container_width=True)
                 with tabs[6]: st.dataframe(build_matrix_table_option_b(odd_schedule, scheduler.duties, recess_lunch_bases, '', scheduler.teachers).set_index("崗位"), use_container_width=True)
@@ -563,6 +564,7 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 even_list = [{"崗位": k.replace('_雙週',''), "負責老師": ", ".join([format_name_full(t, scheduler.teachers) for t in v])} for k, v in even_schedule.items()]
                 odd_list.sort(key=get_display_sort_key)
                 even_list.sort(key=get_display_sort_key)
+                
                 with tabs[7]: st.dataframe(pd.DataFrame(odd_list), use_container_width=True, hide_index=True)
                 with tabs[8]: st.dataframe(pd.DataFrame(even_list), use_container_width=True, hide_index=True)
                     
