@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體 v4.9：每日放學隊獨立編排與精準計分)
+# 核心排表邏輯 (完全體 v5.0：早會優先排程 + 個人當值總覽)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -141,7 +141,7 @@ class DutyScheduler:
                 roles = ['班主任', '非班主任'] if '小息' in duty else (['副校', '主任'] if '放學_' in duty else ['副校', '主任', '非班主任'])
                 duties[f'{day}_{duty}'] = {'weight': weight, 'roles': roles, 'headcount': count, 'is_lunch': '午膳' in duty}
                 
-        # 4. 【徹底改寫】每日獨立放學隊 (星期一至五，A-F路線每日打散，獨立計 20 分)
+        # 4. 每日獨立放學隊
         team_lead_routes = ["A", "B", "C", "D", "E", "F"]
         for day in days:
             for route in team_lead_routes:
@@ -202,12 +202,11 @@ class DutyScheduler:
         lunch_scores = {name: 0 for name in self.teachers}
         ref_scores = {name: 0 for name in self.teachers}
         
-        # 每日時段佔用追蹤器 (完美取代原本的 weekly_afternoon_teachers)
+        # 每日時段佔用追蹤器
         teacher_busy_slots = {name: {d: set() for d in ['星期一', '星期二', '星期三', '星期四', '星期五']} for name in self.teachers}
         
         def is_free(t_name, d, s):
             if s == "UNKNOWN": return True
-            # 因為已無全週崗位，直接檢查當天 (d) 的佔用狀況即可
             busy = teacher_busy_slots.get(t_name, {}).get(d, set())
             if s in busy: return False
             
@@ -226,12 +225,13 @@ class DutyScheduler:
             if t_name in teacher_busy_slots:
                 teacher_busy_slots[t_name][d].add(s)
         
-        # 保證入班當值最高優先級
+        # 【重要更新】：優先級調整為 保早會 > 入班當值 > 其他 > 午膳
         def get_priority(item):
             name, details = item
-            if details.get('class_specific'): return 1 # 第一優先：入班當值
-            if details.get('is_lunch'): return 3       # 最後排：午膳
-            return 2                                   # 第二優先：其他早會、小息、單日放學等
+            if "早會" in name: return 1         # 優先級 1：所有早會崗位 (大閘、雨天操場優先填滿)
+            if "入班當值" in name: return 2     # 優先級 2：入班當值 (若無人手則留空)
+            if details.get('is_lunch'): return 4 # 優先級 4：午膳最後排
+            return 3                             # 優先級 3：小息、放學隊等
             
         sorted_duties = sorted(duties.items(), key=get_priority)
         for duty, details in sorted_duties:
@@ -255,7 +255,6 @@ class DutyScheduler:
                 # 1. 專責崗位的人先進場
                 if details.get('fixed_teacher'):
                     assigned.extend(details['fixed_teacher'])
-                    # 專責老師雖然強制排入，但也要標記佔用時段，以免系統把他們排去別的時段
                     for t in details['fixed_teacher']:
                         mark_busy(t, day, slot)
                 
@@ -268,8 +267,7 @@ class DutyScheduler:
             
             schedule[duty] = assigned
             for teacher in assigned:
-                # 只有非專責(剛剛動態加入的)或未標記的才標記
-                mark_busy(teacher, day, slot)
+                mark_busy(teacher, day, slot) # 動態選上的打上記號
                 
                 if teacher in ref_scores:
                     ref_scores[teacher] += details['weight']
@@ -285,7 +283,7 @@ class DutyScheduler:
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
 st.title("🏫 訓導處當值表自動編排系統 (以「分鐘」精準計分版)")
-st.markdown("系統已加入**每日獨立放學隊**、**入班優先排程邏輯**、**同日同時段防分身**及**早會防連續當值**機制。")
+st.markdown("系統已加入**早會優先排程**及**個人當值總覽**，確保大閘安全無虞，老師查表更清晰。")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
@@ -321,7 +319,31 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                 even_schedule, even_reg, even_lunch, even_ref = scheduler.run_scheduler('雙週')
                 st.success("✅ 單雙週編排雙軌完成！")
                 
-                tab1, tab2, tab3 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (分鐘數)"])
+                # 【新增】整理個人當值總覽資料
+                teacher_duties = {name: {'單週': [], '雙週': []} for name in scheduler.teachers}
+                
+                for duty, assigned in odd_schedule.items():
+                    for t in assigned:
+                        if t in teacher_duties:
+                            teacher_duties[t]['單週'].append(duty.replace('_單週', ''))
+                            
+                for duty, assigned in even_schedule.items():
+                    for t in assigned:
+                        if t in teacher_duties:
+                            teacher_duties[t]['雙週'].append(duty.replace('_雙週', ''))
+                            
+                teacher_view_list = []
+                for name, info in scheduler.teachers.items():
+                    teacher_view_list.append({
+                        "老師姓名": format_name(name, scheduler.teachers),
+                        "職級": info['role'],
+                        "單週當值崗位": ", ".join(teacher_duties[name]['單週']) if teacher_duties[name]['單週'] else "無",
+                        "雙週當值崗位": ", ".join(teacher_duties[name]['雙週']) if teacher_duties[name]['雙週'] else "無"
+                    })
+                
+                # 建立 4 個分頁
+                tab1, tab2, tab3, tab4 = st.tabs(["📅 單週當值表", "📅 雙週當值表", "📊 工作量統計 (分鐘數)", "👤 個人當值總覽"])
+                
                 with tab1:
                     st.dataframe(pd.DataFrame([{"崗位": k.replace('_單週',''), "負責老師": ", ".join([format_name(t, scheduler.teachers) for t in v])} for k, v in odd_schedule.items()]), use_container_width=True, hide_index=True)
                 with tab2:
@@ -337,6 +359,9 @@ if st.button("🚀 開始自動編排當值表", use_container_width=True, type=
                         "總分鐘數(平均)": (odd_ref.get(name, 0) + even_ref.get(name, 0)) / 2
                     } for name, info in scheduler.teachers.items()]
                     st.dataframe(pd.DataFrame(scores_list).sort_values(by="總分鐘數(平均)", ascending=False), use_container_width=True, hide_index=True)
+                with tab4:
+                    st.dataframe(pd.DataFrame(teacher_view_list), use_container_width=True, hide_index=True)
+                    
             except Exception as e:
                 st.error(f"讀取檔案或運算時發生錯誤：{e}")
                 st.info("請確認您的 6 份 CSV 檔案格式與欄位名稱是否正確。")
