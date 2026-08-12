@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 # ==========================================
-# 核心排表邏輯 (完全體 v5.6：影子預排 + 徹底消除空格與分身)
+# 核心排表邏輯 (完全體 v5.7：修正影子預排標記與樓層解析)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -118,7 +118,6 @@ class DutyScheduler:
             "放學_新翼持咪_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
             "放學_正門大閘_15:25-15:45": {"count": 1, "weight": 20, "roles": ['副校', '主任']},
         }
-
         for day in days:
             for duty, details in all_slots.items():
                 if "早會" in duty:
@@ -138,7 +137,6 @@ class DutyScheduler:
                 teacher = self.fixed_duties_map['宣佈']
                 duties[f'{day}_早會_宣佈_8:15-8:35_單週']['fixed_teacher'] = [teacher]
                 duties[f'{day}_早會_宣佈_8:15-8:35_雙週']['fixed_teacher'] = [teacher]
-
         all_classes = [cls for cls in self.subjects.keys() if str(cls) and str(cls)[0] in '123456']
         for day in days:
             for cls in all_classes:
@@ -180,7 +178,6 @@ class DutyScheduler:
         if info.get('special_role') == '圖書館老師' and '放學隊' not in duty_name: return True
         return False
 
-    # 【新增參數】：fixed_overrides 用於接收「單週排定好的小息/午膳」直接套用到雙週
     def run_scheduler(self, week_type, fixed_overrides=None):
         duties = {k: v for k, v in self.duties.items() if week_type in k or ('單週' not in k and '雙週' not in k)}
         schedule = {duty: [] for duty in duties}
@@ -221,16 +218,22 @@ class DutyScheduler:
             day, slot = duty.split('_')[0], self._get_duty_slot(duty)
             assigned = []
             
-            # 【關鍵】：如果在雙週運算時，這個崗位是從單週硬性扣留下來的（小息、午膳、放學）
+            # 【修復邏輯】：若從單週強行套用（影子預排），必須同時更新該老師的忙碌狀態 (mark_busy)
             if fixed_overrides and duty in fixed_overrides:
                 assigned = fixed_overrides[duty].copy()
+                for t in assigned:
+                    mark_busy(t, day, slot)
             
             # 否則執行正常配對邏輯
             elif "小息" in duty:
                 lesson_to_check = 3 if "小息一" in duty else 5
-                # 精準提取樓層 (解決之前 6樓、地下 無法讀取的 bug)
-                duty_floor_str = duty.[...](asc_slot://start-slot-1)split('_') 
-                if '地下' in duty_floor_str: duty_floor = 0
+                
+                # 【修復 BUG】：完美解析樓層部分，徹底解決原本因語法錯誤導致的 Crash
+                parts = duty.[...](asc_slot://start-slot-1)split('_')
+                duty_floor_str = parts if len(parts) > 2 else ""
+                
+                if '地下' in duty_floor_str: 
+                    duty_floor = 0
                 else: 
                     nums = re.findall(r'\d+', duty_floor_str)
                     duty_floor = int(nums[0]) if nums else None
@@ -274,14 +277,13 @@ class DutyScheduler:
 # 網頁介面設計 (Streamlit)
 # ==========================================
 st.set_page_config(page_title="訓導處當值編排系統", page_icon="🏫", layout="wide")
-st.title("🏫 訓導處當值表自動編排系統 (v5.6 兩段式影子預排版)")
+st.title("🏫 訓導處當值表自動編排系統 (v5.7 兩段式影子預排版)")
 st.markdown("系統已加入**影子預排技術**，保證早會/入班無空格，且**小息/午膳/放學單雙週完全一致**！")
 st.divider()
 
 cols1 = st.columns(3); cols2 = st.columns(3)
 files_map = {"1️⃣ 老師名單": "teachers_list.csv", "2️⃣ 課堂時間表": "timetable.csv", "3️⃣ 課室樓層表": "class_locations.csv", "4️⃣ 共備名單": "co_planning.csv", "5️⃣ 主科任教名單": "subject_teachers.csv", "6️⃣ 專責崗位名單": "fixed_duties.csv"}
 uploaded_files = {}
-
 for i, (header, fname) in enumerate(files_map.items()):
     col = cols1[i] if i < 3 else cols2[i-3]
     with col:
