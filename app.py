@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # ==========================================
-# 核心排表邏輯 (完全體 v4.7：大閘專屬職級鎖與全方位防護)
+# 核心排表邏輯 (完全體 v4.8：修復放學變數未定義錯誤)
 # ==========================================
 class DutyScheduler:
     def __init__(self, teachers_df, timetable_df, locations_df, coplanning_df, subjects_df, fixed_duties_df):
@@ -199,6 +199,9 @@ class DutyScheduler:
         reg_scores = {name: 0 for name in self.teachers}
         lunch_scores = {name: 0 for name in self.teachers}
         ref_scores = {name: 0 for name in self.teachers}
+        
+        # 【重要修正】初始化宣告放學防重複追蹤名單，解決未定義錯誤！
+        weekly_afternoon_teachers = set()
         
         # 每日時段佔用追蹤器
         teacher_busy_slots = {name: {d: set() for d in ['星期一', '星期二', '星期三', '星期四', '星期五']} for name in self.teachers}
